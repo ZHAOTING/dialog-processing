@@ -1,0 +1,10 @@
+numpy
+torch
+tqdm
+spacy
+gensim
+pytorch_transformers
+ftfy
+nltk
+sklearn
+scipy
