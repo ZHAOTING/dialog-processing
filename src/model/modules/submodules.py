@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
-from .utils import init_module_weights
+from model.modules.utils import init_module_weights
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

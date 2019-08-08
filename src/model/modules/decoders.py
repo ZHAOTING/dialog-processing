@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .submodules import Attention, DynamicRNN, LockedDropout
-from .utils import init_module_weights, init_rnn_hidden_states, embedded_dropout
+from model.modules.submodules import Attention, DynamicRNN, LockedDropout
+from model.modules.utils import init_module_weights, init_rnn_hidden_states, embedded_dropout
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn import functional as F
 
-from ..modules.utils import init_module_weights
+from model.modules.utils import init_module_weights
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -10,11 +10,11 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn import functional as F
 
-from ..modules.encoders import EncoderRNN
-from ..modules.decoders import DecoderRNN
-from ..modules.submodules import AbsFloorEmbEncoder, RelFloorEmbEncoder
-from ..modules.submodules import GaussianVariation
-from ..modules.utils import init_module_weights, gaussian_kld
+from model.modules.encoders import EncoderRNN
+from model.modules.decoders import DecoderRNN
+from model.modules.submodules import AbsFloorEmbEncoder, RelFloorEmbEncoder
+from model.modules.submodules import GaussianVariation
+from model.modules.utils import init_module_weights, gaussian_kld
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
