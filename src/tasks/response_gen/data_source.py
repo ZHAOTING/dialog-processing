@@ -18,7 +18,6 @@ class DataSource():
         self.dataset_path = config.dataset_path
         self.max_uttr_len = config.max_uttr_len
         self.history_len = config.history_len
-        self.dialog_acts = config.dialog_acts if hasattr(config, "dialog_acts") else None
         # Other attributes
         self.tokenizer = tokenizer
         self.dataset = dataset
@@ -50,9 +49,6 @@ class DataSource():
                     "token_ids": token_ids,
                     "floor_id": floor_id,
                 })
-                if self.dialog_acts is not None:
-                    dialog_act = uttr["utterance_meta"]["dialog_act"]
-                    uttr["dialog_act_id"] = self.dialog_acts.index(dialog_act)
 
         ## Get segments
         self._segments = []
@@ -113,30 +109,23 @@ class DataSource():
                 "tokens": empty_tokens,
                 "token_ids": empty_ids,
                 "floor_id": 0,
-                "dialog_act_id": 0
             }
 
             ## First non-padding input uttrs
             for uttr in segment_uttrs[:-1]:
                 X.append(uttr["token_ids"])
                 X_floor.append(uttr["floor_id"])
-                if self.dialog_acts is not None:
-                    X_da.append(uttr["dialog_act_id"])
 
             ## Then padding input uttrs
             for _ in range(self.history_len-len(segment_uttrs)+1):
                 uttr = padding_uttr
                 X.append(uttr["token_ids"])
                 X_floor.append(uttr["floor_id"])
-                if self.dialog_acts is not None:
-                    X_da.append(uttr["dialog_act_id"])
 
             ## Last output uttr
             uttr = segment_uttrs[-1]
             Y.append(uttr["token_ids"])
             Y_floor.append(uttr["floor_id"])
-            if self.dialog_acts is not None:
-                Y_da.append(uttr["dialog_act_id"])
 
         X = self.tokenizer.convert_batch_ids_to_tensor(X)
         Y = self.tokenizer.convert_batch_ids_to_tensor(Y)
@@ -156,15 +145,5 @@ class DataSource():
             "Y": Y,
             "Y_floor": Y_floor,
         }
-
-        if self.dialog_acts is not None:
-            X_da = torch.LongTensor(X_da).to(DEVICE).view(batch_size, history_len)
-            Y_da = torch.LongTensor(Y_da).to(DEVICE)
-
-            batch_data_dict.update({
-                "X_da": X_da,
-                "Y_da": Y_da,
-            })
-
 
         return batch_data_dict

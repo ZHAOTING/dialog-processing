@@ -41,18 +41,18 @@ class DataSource():
             for uttr in sess["utterances"]:
                 text = uttr["text"]
                 floor = uttr["floor"]
+                dialog_act = uttr["utterance_meta"]["dialog_act"]
                 tokens = self.tokenizer.convert_sent_to_tokens(text)[:self.max_uttr_len]
                 token_ids = self.tokenizer.convert_tokens_to_ids(tokens, bos_and_eos=True)
                 floor_id = ["A", "B"].index(floor)
-
+                dialog_act_id = self.dialog_acts.index(dialog_act)
+                
                 uttr.update({
                     "tokens": tokens,
                     "token_ids": token_ids,
                     "floor_id": floor_id,
+                    "dialog_act_id": dialog_act_id
                 })
-                if self.dialog_acts is not None:
-                    dialog_act = uttr["utterance_meta"]["dialog_act"]
-                    uttr["dialog_act_id"] = self.dialog_acts.index(dialog_act)
 
         ## Get segments
         self._segments = []
@@ -95,8 +95,7 @@ class DataSource():
         ## Data to fill in
         X, Y_da = [], []
         X_floor, Y_floor = [], []
-        if self.dialog_acts is not None:
-            X_da, Y_da = [], []
+        X_da, Y_da = [], []
 
         while self.cur_segment_idx < len(self.segments):
             if len(Y_da) == batch_size:

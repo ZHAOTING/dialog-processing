@@ -96,7 +96,6 @@ if __name__ == "__main__":
         if not k.startswith("__") and k not in config.__dict__:
             corpus_config_dict[k] = v
     config.__dict__.update(corpus_config_dict)
-    config.task = "response_gen"
 
     # set random seeds
     torch.manual_seed(config.seed)

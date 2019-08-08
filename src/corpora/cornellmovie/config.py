@@ -6,6 +6,7 @@ class Config(object):
         self.raw_data_dir = "../data/cornellmovie/raw_data"
 
         ## Task-specific management
+        self.task = task
         self.task_data_dir = f"../data/cornellmovie/{task}"
         self.dataset_path = f"{self.task_data_dir}/dataset.txt"
         self.word_count_path = f"{self.task_data_dir}/word_count.txt"

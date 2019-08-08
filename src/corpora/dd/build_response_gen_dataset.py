@@ -24,6 +24,12 @@ dialog_act_d = {1: "inform", 2: "question", 3: "directive", 4: "commissive"}
 emotion_d = {0: "neutral", 1: "anger", 2: "disgust", 3: "fear", 4: "happiness", 5: "sadness", 6: "surprise"}
 topic_d = {1: "Ordinary Life", 2: "School Life", 3: "Culture & Education", 4: "Attitude & Emotion", 5: "Relationship", 6: "Tourism", 7: "Health", 8: "Work", 9: "Politics", 10: "Finance"}
 
+def clean_dd_text(text):
+    text = standardize_english_text(text)
+    text = re.sub(r"(\w)n ' (t\W)", r"\1 n'\2", text)
+    text = re.sub(r" ' (m|s|re|ve|d|ll)(\W)", r" '\1\2", text)
+    return text
+
 def download_data():
     """Download and unpack dialogs"""
 
@@ -171,15 +177,16 @@ if __name__ == "__main__":
             speaker_idx = 1 - speaker_idx
 
             def tokenize(string):
-                return [token.text for token in nlp(standardize_english_text(string))]
+                return [token.text for token in nlp(clean_dd_text(string))]
             uttr_tokens = tokenize(uttr_text)
-            uttr_text = " ".join(uttr_tokens)
+            tokenized_uttr_text = " ".join(uttr_tokens)
             uttr = {
                 "floor": floor,
-                "text": uttr_text,
+                "text": tokenized_uttr_text,
                 "utterance_meta": {
                     "emotion": emotion,
-                    "dialog_act": dialog_act
+                    "dialog_act": dialog_act,
+                    "original_text": uttr_text,
                 }
             }
             session["utterances"].append(uttr)
