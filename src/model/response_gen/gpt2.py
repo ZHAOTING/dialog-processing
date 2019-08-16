@@ -40,6 +40,7 @@ class GPT2(nn.Module):
         self.top_k = config.top_k
         self.top_p = config.top_p
         self.temp = config.temp
+        self.l2_penalty = config.l2_penalty
         # Other attributes
         self.tokenizer = tokenizer
         self.vocab_size = len(tokenizer)
@@ -55,8 +56,14 @@ class GPT2(nn.Module):
         self.position_embedding = self.transformer.wpe
 
         ## Optimizer
-        from pytorch_transformers import AdamW
-        self.optimizer = AdamW(self.parameters(), lr=0.0)
+        self._set_optimizer()
+
+    def _set_optimizer(self):
+        self.optimizer = optim.AdamW(
+            self.parameters(),
+            lr=0.0,
+            weight_decay=self.l2_penalty
+        )
 
     def _construct_input_output(self, 
         inputs, input_floors, outputs, output_floors, 

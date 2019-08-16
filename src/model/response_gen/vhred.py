@@ -159,7 +159,7 @@ class VHRED(nn.Module):
 
     def _set_optimizer(self):
         if self.optimizer_type == "adam":
-            self.optimizer = optim.Adam(
+            self.optimizer = optim.AdamW(
                 self.parameters(),
                 lr=0.0,
                 weight_decay=self.l2_penalty

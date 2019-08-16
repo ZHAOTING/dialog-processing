@@ -198,7 +198,7 @@ class DecoderRNN(nn.Module):
 
     def forward(self, batch_size, inputs=None, hiddens=None, feats=None,
         attn_ctx=None, attn_mask=None,
-        mode="teacher forcing", gen_type="greedy", beam_size=1,
+        mode="teacher forcing", gen_type="greedy",
         top_k=1, top_p=1.0, temp=1.0):
 
         ret_dict = {

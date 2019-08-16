@@ -103,7 +103,7 @@ class HRESepUttrEnc(nn.Module):
 
     def _set_optimizer(self):
         if self.optimizer_type == "adam":
-            self.optimizer = optim.Adam(
+            self.optimizer = optim.AdamW(
                 self.parameters(),
                 lr=0.0,
                 weight_decay=self.l2_penalty
@@ -171,7 +171,7 @@ class HRESepUttrEnc(nn.Module):
         src_floors = input_floors.view(-1)  # batch_size*history_len
         target_floors = output_floors.unsqueeze(1).repeat(1, history_len).view(-1)  # batch_size*history_len
         if self.floor_encoder_type == "abs":
-            is_own_uttr_flag = src_floors.byte()
+            is_own_uttr_flag = src_floors.bool()
         elif self.floor_encoder_type == "rel":
             is_own_uttr_flag = (target_floors == src_floors)  # batch_size*history_len
         else:
@@ -179,13 +179,13 @@ class HRESepUttrEnc(nn.Module):
 
         # gather sent encodings
         stacked_sent_encodings = torch.stack([own_sent_encodings, oth_sent_encodings], dim=1)
-        select_mask = torch.stack([is_own_uttr_flag, 1-is_own_uttr_flag], dim=1)
+        select_mask = torch.stack([is_own_uttr_flag, ~is_own_uttr_flag], dim=1)
         select_mask = select_mask.unsqueeze(2).repeat(1, 1, stacked_sent_encodings.size(-1))
         selected_sent_encodings = torch.masked_select(stacked_sent_encodings, select_mask).view(batch_size, history_len, -1)
 
         # gather word encodings
         stacked_word_encodings = torch.stack([own_word_encodings, oth_word_encodings], dim=1)
-        select_mask = torch.stack([is_own_uttr_flag, 1-is_own_uttr_flag], dim=1)
+        select_mask = torch.stack([is_own_uttr_flag, ~is_own_uttr_flag], dim=1)
         select_mask = select_mask.unsqueeze(2).unsqueeze(3).repeat(1, 1, max_x_sent_len, stacked_word_encodings.size(-1))
         selected_word_encodings = torch.masked_select(stacked_word_encodings, select_mask).view(batch_size, history_len, max_x_sent_len, -1)
 

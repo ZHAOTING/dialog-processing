@@ -106,7 +106,7 @@ class Attention(nn.Module):
     Inputs:
         query {FloatTensor} -- (batch, query_len, query_dim)
         context {FloatTensor} -- (batch, context_len, context_dim)
-        mask {ByteTensor} -- (batch, context_len)
+        mask {BoolTensor} -- (batch, context_len)
 
     Returns:
         [type] -- [description]
@@ -148,7 +148,7 @@ class Attention(nn.Module):
         # mask out unneeded contexts
         if mask is not None:
             mask = mask.unsqueeze(1).repeat(1, query_len, 1)
-            ignore_mask = 1 - mask
+            ignore_mask = ~mask
             emission.data.masked_fill_(ignore_mask, -float('inf'))
 
         # calculate attention
