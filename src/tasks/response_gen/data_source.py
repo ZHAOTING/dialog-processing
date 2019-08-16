@@ -91,8 +91,6 @@ class DataSource():
         ## Data to fill in
         X, Y = [], []
         X_floor, Y_floor = [], []
-        if self.dialog_acts is not None:
-            X_da, Y_da = [], []
 
         while self.cur_segment_idx < len(self.segments):
             if len(Y) == batch_size:

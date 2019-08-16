@@ -31,12 +31,23 @@ def init_module_weights(m, init_w=0.08):
     if isinstance(m, nn.Linear):
         m.weight.data.uniform_(-1.0*init_w, init_w)
         m.bias.data.fill_(0)
+    elif isinstance(m, nn.Bilinear):
+        m.weight.data.uniform_(-1.0*init_w, init_w)
+        m.bias.data.fill_(0)
     elif isinstance(m, nn.Embedding):
         m.weight.data.uniform_(-1.0*init_w, init_w)
     elif isinstance(m, nn.GRU) or isinstance(m, nn.LSTM):
         for name, param in m.named_parameters():
             if "weight" in name:
                 nn.init.xavier_uniform_(param)
+    elif isinstance(m, nn.ModuleDict):
+        for submodule in m.values():
+            init_module_weights(submodule)
+    elif isinstance(m, nn.ModuleList):
+        for submodule in m:
+            init_module_weights(submodule)
+    elif isinstance(m, nn.Tanh) or isinstance(m, nn.Sigmoid):
+        pass
     else:
         raise Exception("undefined initialization for module {}".format(m))
 
