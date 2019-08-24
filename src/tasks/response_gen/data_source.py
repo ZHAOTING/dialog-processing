@@ -70,7 +70,7 @@ class DataSource():
                 self.statistics["n_tokens"] += len(tokens)
         print(self.statistics)
 
-    def epoch_init(self, shuffle=True):
+    def epoch_init(self, shuffle=False):
         self.cur_segment_idx = 0
         if shuffle:
             self.segments = copy.deepcopy(self._segments)

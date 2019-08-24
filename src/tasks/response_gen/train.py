@@ -1,4 +1,3 @@
-from __future__ import absolute_import
 import json
 import random
 import code
@@ -194,7 +193,7 @@ if __name__ == "__main__":
 
         # Train
         n_batch = 0
-        train_data_source.epoch_init()
+        train_data_source.epoch_init(shuffle=True)
         while True:
             batch_data = train_data_source.next(config.batch_size)
             if batch_data is None:
@@ -222,7 +221,7 @@ if __name__ == "__main__":
 
                 log_s = "<Test> - Samples:"
                 mlog(log_s)
-                test_data_source.epoch_init()
+                test_data_source.epoch_init(shuffle=True)
                 for sample_idx in range(5):
                     batch_data = test_data_source.next(1)
 

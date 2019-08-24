@@ -1,4 +1,3 @@
-from __future__ import absolute_import
 import json
 import random
 import code
@@ -13,9 +12,11 @@ import numpy as np
 
 from model.da_recog.hre import HRE
 from model.da_recog.hre_sep_uttr_enc import HRESepUttrEnc
+from model.da_recog.roberta import Roberta
 from utils.helpers import metric_is_improving, StatisticsReporter
 from utils.metrics import ClassificationMetrics
 from tokenization.basic_tokenizer import BasicTokenizer
+from tokenization.roberta_tokenizer import ModRobertaTokenizer
 from .data_source import DataSource
 
 def str2bool(v):
@@ -25,9 +26,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # model - architecture
-    parser.add_argument("--model", type=str, default="hre", help="[hre, hre_sep_uttr_enc]")
+    parser.add_argument("--model", type=str, default="hre", help="[hre, hre_sep_uttr_enc, roberta]")
+    parser.add_argument("--model_size", type=str, default="large-mnli", help="model type for roberta, in [base, large, large-mnli]")
     parser.add_argument("--rnn_type", type=str, default="lstm", help="[gru, lstm]")
     parser.add_argument("--floor_encoder", type=str, default="none", help="floor encoder type in [none, rel, abs]")
+    parser.add_argument("--tokenizer", type=str, default="basic", help="[basic, roberta]")
 
     # model - numbers
     parser.add_argument("--history_len", type=int, default=5, help="number of history sentences")
@@ -82,7 +85,10 @@ if __name__ == "__main__":
     np.random.seed(config.seed)
 
     # tokenizers
-    tokenizer = BasicTokenizer(config.word_count_path, config.vocab_size)
+    if config.tokenizer == "basic":
+        tokenizer = BasicTokenizer(config.word_count_path, config.vocab_size)
+    elif config.tokenizer == "roberta":
+        tokenizer = ModRobertaTokenizer(config.model_size)
 
     # data loaders & number reporters
     trn_reporter = StatisticsReporter()
@@ -111,6 +117,8 @@ if __name__ == "__main__":
         Model = HRE
     elif config.model == "hre_sep_uttr_enc":
         Model = HRESepUttrEnc
+    elif config.model == "roberta":
+        Model = Roberta
     model = Model(config, tokenizer)
 
     # model adaption
@@ -156,7 +164,7 @@ if __name__ == "__main__":
 
         # Train
         n_batch = 0
-        train_data_source.epoch_init()
+        train_data_source.epoch_init(shuffle=True)
         while True:
             batch_data = train_data_source.next(config.batch_size)
             if batch_data is None:

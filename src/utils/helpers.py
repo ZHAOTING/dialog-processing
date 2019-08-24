@@ -72,7 +72,7 @@ def metric_is_improving(metric_history, history_len=2):
             improving = True
     return improving
 
-class StatisticsReporter():
+class StatisticsReporter:
     def __init__(self):
         self.statistics = collections.defaultdict(list)
 

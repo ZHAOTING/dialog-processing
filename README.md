@@ -157,11 +157,13 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
 - dialog act recognition
   - HRE (`HRE`)
     - with relative speaker utterance encoders (`HRESepUttrEnc`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
+  - Roberta (`Roberta`, Liu 2019, [arxiv](https://arxiv.org/abs/1907.11692))
 
 ### Tokenizers
 
 - Whitespace-based tokenizer (`BasicTokenizer`)
 - GPT2 tokenizer (`ModGPT2Tokenizer`)
+- Roberta tokenizer (`ModRobertaTokenizer`)
 
 ### Metrics
 (in `utils/metrics.py`)

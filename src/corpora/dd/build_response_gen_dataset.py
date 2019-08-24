@@ -186,7 +186,6 @@ if __name__ == "__main__":
                 "utterance_meta": {
                     "emotion": emotion,
                     "dialog_act": dialog_act,
-                    "original_text": uttr_text,
                 }
             }
             session["utterances"].append(uttr)

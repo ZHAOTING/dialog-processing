@@ -48,6 +48,8 @@ def init_module_weights(m, init_w=0.08):
             init_module_weights(submodule)
     elif isinstance(m, nn.Tanh) or isinstance(m, nn.Sigmoid):
         pass
+    elif isinstance(m, nn.Dropout):
+        pass
     else:
         raise Exception("undefined initialization for module {}".format(m))
 

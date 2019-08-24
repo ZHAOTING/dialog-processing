@@ -2,16 +2,14 @@ import code
 import collections
 
 import torch
-from pytorch_transformers import GPT2Tokenizer
+from pytorch_transformers import RobertaTokenizer
         
-class ModGPT2Tokenizer(object):
-    def __init__(self):
-        self.pretrained = GPT2Tokenizer.from_pretrained(
-            'gpt2', 
-            sep_token="<|endoftext|>" 
-        ) # Initializing `sep_token` is a quick fix for a pytorch-transformers bug. See Issue 799.
+class ModRobertaTokenizer(object):
+    def __init__(self, model_size):
+        assert model_size in ["base", "large", "large-mnli"]
+        self.pretrained = RobertaTokenizer.from_pretrained(f"roberta-{model_size}")
 
-        self.special_tokens = ["<pad>", "<s>", "</s>", "<speaker1>", "<speaker2>", "<cls>"]
+        self.special_tokens = ["<speaker1>", "<speaker2>"]
         self.adapt_vocab()
 
         self.word2id = self.pretrained.encoder
@@ -19,12 +17,11 @@ class ModGPT2Tokenizer(object):
         self.id2word = self.pretrained.decoder
         self.id2word.update(self.pretrained.added_tokens_decoder)
 
-        self.pad_id = self.word2id["<pad>"]
-        self.bos_id = self.word2id["<s>"]
-        self.eos_id = self.word2id["</s>"]
         self.speaker1_id = self.word2id["<speaker1>"]
         self.speaker2_id = self.word2id["<speaker2>"]
-        self.cls_id = self.word2id["<cls>"]
+        self.pad_id = self.word2id[self.pretrained.pad_token]
+        self.cls_id = self.word2id[self.pretrained.cls_token]
+        self.sep_id = self.word2id[self.pretrained.sep_token]
 
     def __len__(self):
         return len(self.pretrained)
@@ -33,14 +30,7 @@ class ModGPT2Tokenizer(object):
         self.pretrained.add_tokens(self.special_tokens)
 
     def convert_tokens_to_sent(self, tokens):
-        decoded_sent = self.pretrained.decode(self.pretrained.convert_tokens_to_ids(tokens), clean_up_tokenization_spaces=False)
-        sent = decoded_sent.\
-            replace("<s>", "<s> ").\
-            replace("</s>", " </s>").\
-            replace("<pad>", " <pad>").\
-            replace("<speaker1>", "").\
-            replace("<speaker2>", "").\
-            replace("<cls>", "")
+        sent = self.pretrained.decode(self.pretrained.convert_tokens_to_ids(tokens))
         return sent
 
     def convert_sent_to_tokens(self, sent):
@@ -53,25 +43,15 @@ class ModGPT2Tokenizer(object):
         ids = self.pretrained.convert_tokens_to_ids(tokens)
         if len(ids) == 0:
             return ids
-        if bos_and_eos:
-            ids = [self.bos_id] + ids + [self.eos_id]
-        elif add_eos:
-            ids = ids + [self.eos_id]
         return ids
 
-    def convert_ids_to_tokens(self, ids, trim_bos=False, trim_pad=False, trim_from_eos=False, trim_after_eos=False):
+    def convert_ids_to_tokens(self, ids, trim_pad=False, **kwargs):
         _tokens = self.pretrained.convert_ids_to_tokens(ids)
         tokens = []
         for token in _tokens:
-            if trim_bos and token == self.id2word[self.bos_id]:
-                continue
             if trim_pad and token == self.id2word[self.pad_id]:
                 continue
-            if trim_from_eos and token == self.id2word[self.eos_id]:
-                break
             tokens.append(token)
-            if trim_after_eos and token == self.id2word[self.eos_id]:
-                break
         return tokens
 
     def convert_batch_ids_to_tensor(self, batch_ids):

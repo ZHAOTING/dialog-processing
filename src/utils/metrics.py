@@ -7,48 +7,12 @@ from nltk.translate.bleu_score import sentence_bleu
 from nltk.translate.bleu_score import SmoothingFunction
 from sklearn.metrics.pairwise import cosine_similarity as cosine
 import sklearn as sk
-from scipy import stats
 
 from .sif_embedding import SIF_embedding, compute_pc, get_weighted_average
-
-def classification_metrics(true_labels, pred_labels, classes, verbose=True):
-    display_str = "\tClassification report: \n"
-    if verbose:
-        display_str += "{}\n".format(sk.metrics.classification_report(true_labels, pred_labels, target_names=classes, labels=list(range(0,len(classes)))))
-    display_str += "\tF1 macro        : {:.1f}\n".format(100*sk.metrics.f1_score(true_labels, pred_labels, average="macro"))
-    display_str += "\tF1 micro        : {:.1f}\n".format(100*sk.metrics.f1_score(true_labels, pred_labels, average="micro"))
-    display_str += "\tF1 weighted     : {:.1f}\n".format(100*sk.metrics.f1_score(true_labels, pred_labels, average="weighted"))
-    display_str += "\tAccruracy       : {:.1f}".format(100*sk.metrics.accuracy_score(true_labels, pred_labels))
-
-    return display_str
-
-def calculateContingency(data_A, data_B):
-    n = len(data_A)
-    assert len(data_B) == n
-    ABrr = 0
-    ABrw = 0
-    ABwr = 0
-    ABww = 0
-    for i in range(0,n):
-        if(data_A[i]==1 and data_B[i]==1):
-            ABrr = ABrr+1
-        if (data_A[i] == 1 and data_B[i] == 0):
-            ABrw = ABrw + 1
-        if (data_A[i] == 0 and data_B[i] == 1):
-            ABwr = ABwr + 1
-        else:
-            ABww = ABww + 1
-    return np.array([[ABrr, ABrw], [ABwr, ABww]])
-
-def mcNemar(table):
-    statistic = float(np.abs(table[0][1]-table[1][0]))**2/(table[1][0]+table[0][1])
-    pval = 1-stats.chi2.cdf(statistic,1)
-    return pval
 
 class ClassificationMetrics:
     def __init__(self, classes):
         self.classes = classes
-        pass
 
     def classification_report(self, true_labels, pred_labels, return_dict=False):
         return sk.metrics.classification_report(true_labels, pred_labels, target_names=self.classes, labels=list(range(0, len(self.classes))), output_dict=return_dict)
