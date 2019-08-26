@@ -45,7 +45,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_sent_encoder_layers", type=int, default=2)
     parser.add_argument("--dial_encoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_dial_encoder_layers", type=int, default=2)
-    parser.add_argument("--latent_dim", type=int, default=100)
+    parser.add_argument("--latent_dim", type=int, default=500)
     parser.add_argument("--decoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_decoder_layers", type=int, default=2)
 
@@ -237,6 +237,7 @@ if __name__ == "__main__":
                             ids=uttr,
                             trim_bos=True,
                             trim_from_eos=True,
+                            trim_pad=True
                         )
                         floor = "A" if floor == 1 else "B"
                         log_s += "  {}: {}\n".format(
@@ -253,6 +254,7 @@ if __name__ == "__main__":
                         ids=uttr,
                         trim_bos=True,
                         trim_from_eos=True,
+                        trim_pad=True
                     )
                     log_s += "  {}: {}\n".format(
                         floor,
@@ -331,7 +333,8 @@ if __name__ == "__main__":
                 ref = tokenizer.convert_ids_to_tokens(
                     ids=ref,
                     trim_bos=True,
-                    trim_from_eos=True
+                    trim_from_eos=True,
+                    trim_pad=True
                 )
                 ref = tokenizer.convert_tokens_to_sent(ref)
                 ref_floor = "A" if batch_floors[idx] == 1 else "B"
@@ -376,7 +379,7 @@ if __name__ == "__main__":
         avg_len = np.mean(hyp_lens)
         # Output
         log_s = \
-            f"\n<Tst> - {time.time()-start_time:.3f}s -"\
+            f"\n<Tst> - {time.time()-start_time:.3f}s - \n"\
             f"\tbleu:          {bleu:.5g}\n"\
             f"\tbow extrema:   {ext_emb_sim:.5g}\n"\
             f"\tbow avg:       {avg_emb_sim:.5g}\n"\

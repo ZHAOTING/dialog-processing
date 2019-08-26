@@ -46,7 +46,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_sent_encoder_layers", type=int, default=2)
     parser.add_argument("--dial_encoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_dial_encoder_layers", type=int, default=2)
-    parser.add_argument("--latent_dim", type=int, default=100)
+    parser.add_argument("--latent_dim", type=int, default=500)
     parser.add_argument("--decoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_decoder_layers", type=int, default=2)
 
@@ -187,7 +187,8 @@ if __name__ == "__main__":
                 ctx = tokenizer.convert_ids_to_tokens(
                     ids=ctx,
                     trim_bos=True,
-                    trim_from_eos=True
+                    trim_from_eos=True,
+                    trim_pad=True
                 )
                 ctx = tokenizer.convert_tokens_to_sent(ctx)
                 ctx_floor = ctx_floors[uttr_idx]
@@ -202,7 +203,8 @@ if __name__ == "__main__":
             ref = tokenizer.convert_ids_to_tokens(
                 ids=ref,
                 trim_bos=True,
-                trim_from_eos=True
+                trim_from_eos=True,
+                trim_pad=True
             )
             ref = tokenizer.convert_tokens_to_sent(ref)
             ref_floor = "A" if batch_floors[idx] == 1 else "B"
@@ -275,29 +277,20 @@ if __name__ == "__main__":
     hyp_lens = [len(tokens) for tokens in hyp_tokens_lst]
     avg_len = np.mean(hyp_lens)
     # Output
-    log_s = "\
-        \n<Tst> - {:.3f}s - \n\
-        \t-> Sentence\n\
-        \t  bleu:         {:.5g}\n\
-        \t  bow extrema:  {:.5g}\n\
-        \t  bow avg:      {:.5g}\n\
-        \t  bow greedy:   {:.5g}\n\
-        \t  SIF emb sim:  {:.5g}\n\
-        \t  intra dist 1: {:.5g}\t intra dist 2: {:.5g}\n\
-        \t  inter dist 1: {:.5g}\t inter dist 2: {:.5g}\n\
-        \t  intra types 1: {:.5g}\t intra types 2: {:.5g}\n\
-        \t  inter types 1: {}\t inter types 2: {}\n\
-        \t  avg length: {:.5g}".format(
-        time.time()-start_time,
-        bleu,
-        ext_emb_sim,
-        avg_emb_sim,
-        greedy_emb_sim,
-        sif_emb_sim,
-        intra_dist1, intra_dist2,
-        inter_dist1, inter_dist2,
-        intra_types1, intra_types2,
-        inter_types1, inter_types2,
-        avg_len
-    )
+    log_s = \
+        f"\n<Tst> - {time.time()-start_time:.3f}s - \n"\
+        f"\tbleu:          {bleu:.5g}\n"\
+        f"\tbow extrema:   {ext_emb_sim:.5g}\n"\
+        f"\tbow avg:       {avg_emb_sim:.5g}\n"\
+        f"\tbow greedy:    {greedy_emb_sim:.5g}\n"\
+        f"\tSIF emb sim:   {sif_emb_sim:.5g}\n"\
+        f"\tintra dist 1:  {intra_dist1:.5g}\n"\
+        f"\tintra dist 2:  {intra_dist2:.5g}\n"\
+        f"\tinter dist 1:  {inter_dist1:.5g}\n"\
+        f"\tinter dist 2:  {inter_dist2:.5g}\n"\
+        f"\tintra types 1: {intra_types1:.5g}\n"\
+        f"\tintra types 2: {intra_types2:.5g}\n"\
+        f"\tinter types 1: {inter_types1}\n"\
+        f"\tinter types 2: {inter_types2}\n"\
+        f"\tavg length:    {avg_len:.5g}"
     mlog(log_s)
