@@ -3,7 +3,7 @@ torch
 tqdm
 spacy
 gensim
-pytorch_transformers
+transformers
 ftfy
 nltk
 sklearn
