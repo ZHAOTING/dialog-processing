@@ -19,9 +19,9 @@ from model.response_gen.vhcr import VHCR
 from model.response_gen.gpt2 import GPT2
 from utils.helpers import metric_is_improving, StatisticsReporter
 from utils.metrics import SentenceMetrics
-from tokenization.basic_tokenizer import BasicTokenizer
+from tokenization.whitespace_tokenizer import WhiteSpaceTokenizer
 from tokenization.gpt2_tokenizer import ModGPT2Tokenizer
-from .data_source import DataSource
+from tasks.response_gen.data_source import DataSource
 
 def str2bool(v):
     return v.lower() in ('true', '1', "True")
@@ -36,9 +36,10 @@ if __name__ == "__main__":
     parser.add_argument("--floor_encoder", type=str, default="none", help="floor encoder type in [none, rel, abs]")
     parser.add_argument("--use_attention", type=str2bool, default=False, help="use attention for decoder")
     parser.add_argument("--tie_weights", type=str2bool, default=True, help="tie weights for decoder")
-    parser.add_argument("--tokenizer", type=str, default="basic", help="[basic, gpt2]")
+    parser.add_argument("--tokenizer", type=str, default="ws", help="[ws, gpt2]")
 
     # model - numbers
+    parser.add_argument("--vocab_size", type=int, default=10000)
     parser.add_argument("--history_len", type=int, default=5, help="number of history sentences")
     parser.add_argument("--word_embedding_dim", type=int, default=200)
     parser.add_argument("--attr_embedding_dim", type=int, default=30)
@@ -87,6 +88,8 @@ if __name__ == "__main__":
         from corpora.dd.config import Config
     elif config.corpus == "cornellmovie":
         from corpora.cornellmovie.config import Config
+    elif config.corpus == "personachat":
+        from corpora.personachat.config import Config
     corpus_config = Config(task="response_gen")
 
     ## merge parse args with corpus config
@@ -104,8 +107,8 @@ if __name__ == "__main__":
     np.random.seed(config.seed)
 
     # tokenizers
-    if config.tokenizer == "basic":
-        tokenizer = BasicTokenizer(config.word_count_path, config.vocab_size)
+    if config.tokenizer == "ws":
+        tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
     elif config.tokenizer == "gpt2":
         tokenizer = ModGPT2Tokenizer()
 
@@ -117,7 +120,7 @@ if __name__ == "__main__":
     )
 
     # metrics calculator
-    eval_tokenizer = BasicTokenizer(config.word_count_path, config.vocab_size)
+    eval_tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
     metrics = SentenceMetrics(config.eval_word_embedding_path, eval_tokenizer)
 
     # build model
@@ -172,7 +175,7 @@ if __name__ == "__main__":
         if batch_data is None:
             break
 
-        ret_dict = model.test_step(batch_data)
+        ret_data, ret_stat = model.test_step(batch_data)
 
         batch_ctxs = batch_data["X"].tolist()
         batch_floors = batch_data["X_floor"].tolist()
@@ -182,7 +185,7 @@ if __name__ == "__main__":
             ctx_lst = []
             for uttr_idx in range(len(ctx_seq)):
                 ctx = ctx_seq[uttr_idx]
-                if ctx[0] == tokenizer.pad_id:
+                if ctx[0] == tokenizer.pad_token_id:
                     continue
                 ctx = tokenizer.convert_ids_to_tokens(
                     ids=ctx,
@@ -190,7 +193,7 @@ if __name__ == "__main__":
                     trim_from_eos=True,
                     trim_pad=True
                 )
-                ctx = tokenizer.convert_tokens_to_sent(ctx)
+                ctx = tokenizer.convert_tokens_to_string(ctx)
                 ctx_floor = ctx_floors[uttr_idx]
                 ctx_floor = "A" if ctx_floor == 1 else "B"
                 ctx_lst.append((ctx, ctx_floor))
@@ -206,11 +209,11 @@ if __name__ == "__main__":
                 trim_from_eos=True,
                 trim_pad=True
             )
-            ref = tokenizer.convert_tokens_to_sent(ref)
+            ref = tokenizer.convert_tokens_to_string(ref)
             ref_floor = "A" if batch_floors[idx] == 1 else "B"
             refs.append((ref, ref_floor))
 
-        batch_hyps = ret_dict["symbols"].tolist()
+        batch_hyps = ret_data["symbols"].tolist()
         for idx in range(len(batch_hyps)):
             hyp = batch_hyps[idx]
             hyp = tokenizer.convert_ids_to_tokens(
@@ -219,7 +222,7 @@ if __name__ == "__main__":
                 trim_from_eos=True,
                 trim_pad=True,
             )
-            hyp = tokenizer.convert_tokens_to_sent(hyp)
+            hyp = tokenizer.convert_tokens_to_string(hyp)
             hyp_floor = "A" if batch_floors[idx] == 1 else "B"
             hyps.append((hyp, hyp_floor))
 
@@ -273,7 +276,7 @@ if __name__ == "__main__":
         intra_types1, intra_types2, inter_types1, inter_types2 \
         = metrics.batch_div_distinct(hyp_texts)
     # Average sentence length
-    hyp_tokens_lst = [eval_tokenizer.convert_sent_to_tokens(sent) for sent in hyp_texts]
+    hyp_tokens_lst = [eval_tokenizer.convert_string_to_tokens(sent) for sent in hyp_texts]
     hyp_lens = [len(tokens) for tokens in hyp_tokens_lst]
     avg_len = np.mean(hyp_lens)
     # Output

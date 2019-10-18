@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.modules.submodules import Attention, DynamicRNN, LockedDropout
-from model.modules.utils import init_module_weights, init_rnn_hidden_states, embedded_dropout
+from model.modules.utils import init_module_weights, init_rnn_hidden_states, embedded_dropout, generate_square_subsequent_mask
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -18,7 +18,7 @@ class DecoderRNN(nn.Module):
     GEN_TOP = "top"
 
     def __init__(self, vocab_size, input_dim, hidden_dim, n_layers,
-            bos_id, eos_id, pad_id, max_len,
+            bos_token_id, eos_token_id, pad_token_id, max_len,
             dropout_emb=0.0, dropout_input=0.0, dropout_hidden=0.0, dropout_output=0.0,
             use_attention=False, attn_dim=0, feat_dim=0,
             embedding=None, tie_weights=False, rnn_type="gru"):
@@ -29,9 +29,9 @@ class DecoderRNN(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
-        self.bos_id = bos_id
-        self.eos_id = eos_id
-        self.pad_id = pad_id
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+        self.pad_token_id = pad_token_id
         self.max_len = max_len
         self.dropout_emb = dropout_emb
         self.dropout_input = dropout_input
@@ -48,7 +48,7 @@ class DecoderRNN(nn.Module):
             self.embedding = nn.Embedding(
                 vocab_size,
                 input_dim,
-                padding_idx=pad_id
+                padding_idx=pad_token_id
             )
         else:
             self.embedding = embedding
@@ -178,8 +178,7 @@ class DecoderRNN(nn.Module):
 
                 # Remove tokens with cumulative probability above the threshold
                 sorted_indices_to_remove = cumulative_probs > top_p
-                # Shift the indices to the right to keep also the first token above the threshold
-                #sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                # Keep the first token above the threshold
                 sorted_indices_to_remove[..., 0] = 0
 
                 for batch_idx in range(logits.size(0)):
@@ -231,7 +230,7 @@ class DecoderRNN(nn.Module):
             step_symbol_lst = []
 
             # bos input for the first step
-            bos_input = torch.LongTensor([self.bos_id]).to(DEVICE)
+            bos_input = torch.LongTensor([self.bos_token_id]).to(DEVICE)
             bos_input.requires_grad_(False)
             step_input = bos_input.expand(batch_size, 1)
 
@@ -286,12 +285,258 @@ class DecoderRNN(nn.Module):
 
         return ret_dict
 
+#######################
+# Vanilla Transformer decoders
+#######################
 
+class TransformerDecoderBlock(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_heads, dropout=0.0):
+        super(CKADBlock, self).__init__()
 
+        self.norm1 = nn.LayerNorm(input_dim)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=input_dim,
+            num_heads=num_heads,
+            dropout=dropout
+        )
+        self.dropout1 = nn.Dropout(dropout)
 
+        self.norm2 = nn.LayerNorm(input_dim)
+        self.ctx_attn = nn.MultiheadAttention(
+            embed_dim=input_dim,
+            num_heads=num_heads,
+            dropout=dropout
+        )
+        self.dropout2 = nn.Dropout(dropout)
+        
+        self.norm3 = nn.LayerNorm(input_dim)
+        self.ffn = nn.ModuleList([
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_dim)
+        ])
+        self.dropout3 = nn.Dropout(dropout)
 
+        ## Initialization
+        self._init_weights()
 
+    def _init_weights(self):
+        init_module_weights(self.ffn)
 
+    def forward(self, inputs, ctx, attn_mask=None, ctx_attn_mask=None):
+        uttr_max_len, batch_size, _ = inputs.size()
 
+        key_padding_mask = None if attn_mask is None else ~attn_mask
+        ctx_key_padding_mask = None if ctx_attn_mask is None else ~ctx_attn_mask
 
+        res_x = inputs
+        x = self.norm1(inputs)
+        x, attn = self.self_attn(
+            query=x,
+            key=x,
+            value=x,
+            key_padding_mask=key_padding_mask,
+            attn_mask=generate_square_subsequent_mask(uttr_max_len)
+        )
+        x = res_x + self.dropout1(x)
 
+        res_x = inputs
+        x = self.norm2(inputs)
+        x, ctx_attn = self.self_attn(
+            query=x,
+            key=ctx,
+            value=ctx,
+            key_padding_mask=ctx_key_padding_mask
+        )
+        x = res_x + self.dropout2(x)
+
+        res_x = x
+        x = self.norm3(x)
+        for m in self.ffn:
+            x = m(x)
+        x = res_x + self.dropout3(x)
+
+        return x, (attn, ctx_attn,)
+
+class TransformerDecoder(nn.Module):
+    MODE_TEACHER_FORCE = "teacher forcing"
+    MODE_FREE_RUN = "free running"
+    GEN_GREEDY = "greedy"
+    GEN_SAMPLE = "sample"
+    GEN_TOP = "top"
+
+    def __init__(self, vocab_size, input_dim, hidden_dim, n_attn_heads, n_blocks,
+                 bos_token_id, eos_token_id, pad_token_id, max_len, 
+                 word_embedding, position_embedding, dropout=0.0):
+        super(TransformerDecoder, self).__init__()
+
+        # attributes
+        self.vocab_size = vocab_size
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.n_attn_heads = n_attn_heads
+        self.n_blocks = n_blocks
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+        self.pad_token_id = pad_token_id
+        self.max_len = max_len
+        self.dropout = dropout
+        
+        # input components
+        self.word_embedding = word_embedding
+        self.position_embedding = position_embedding
+
+        # core components
+        self.blocks = nn.ModuleList([
+            TransformerDecoderBlock(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                num_heads=n_attn_heads,
+                dropout=dropout
+            ) for _ in range(n_blocks)
+        ])
+        self.norm = nn.LayerNorm(input_dim)
+
+        # output components
+        self.word_classifier = nn.Linear(
+            input_dim,
+            vocab_size
+        )
+        self.word_classifier.weight = self.word_embedding.weight
+
+        # initialization
+        self.init_weights()
+
+    def init_weights(self):
+        pass
+
+    def _step(self, inputs, ctx, attn_mask=None, ctx_attn_mask=None):
+        x = inputs  # [batch_size, max_seq_len/1, word_embedding_dim]
+
+        x = x.transpose(0, 1).contiguous()
+        ctx = ctx.transpose(0, 1).contiguous()
+        for block in self.blocks:
+            x, _ = block(
+                inputs=x, 
+                ctx=ctx,
+                attn_mask=attn_mask,
+                ctx_attn_mask=ctx_attn_mask
+            )
+        x = self.norm(x)
+        x = x.transpose(0, 1).contiguous()
+
+        logits = self.word_classifier(x)
+
+        return {
+            "logits": logits,
+        }
+
+    def _step_decode(self, logits, gen_type, top_k=0, top_p=0.0, temp=1.0):
+        logits = logits/temp
+
+        if gen_type == CKADecoder.GEN_GREEDY:
+            symbol = logits.topk(1)[1]
+        elif gen_type == CKADecoder.GEN_SAMPLE:
+            probs = F.softmax(logits, dim=-1)
+            dist = torch.distributions.Categorical(probs)
+            symbol = dist.sample().unsqueeze(1)
+        elif gen_type == CKADecoder.GEN_TOP:
+            top_k = min(top_k, logits.size(-1))
+            if top_k > 0:
+                indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+                logits[indices_to_remove] = -float("inf")
+            if top_p > 0.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+                # Remove tokens with cumulative probability above the threshold
+                sorted_indices_to_remove = cumulative_probs > top_p
+                # keep the first token above the threshold
+                sorted_indices_to_remove[..., 0] = 0
+
+                for batch_idx in range(logits.size(0)):
+                    indices_to_remove = sorted_indices[batch_idx][sorted_indices_to_remove[batch_idx]]
+                    logits[batch_idx, indices_to_remove] = -float("inf")
+            probs = F.softmax(logits, dim=-1)
+            dist = torch.distributions.Categorical(probs)
+            symbol = dist.sample().unsqueeze(1)
+
+        return {
+            "symbol": symbol,
+        }
+
+    def _get_embeddings(self, inputs):
+        batch_size, max_len = inputs.size()
+
+        word_embeddings = self.word_embedding(inputs)
+
+        position_idcs = torch.LongTensor([idx for idx in range(max_len)]).to(DEVICE)
+        position_idcs = position_idcs.unsqueeze(0).repeat(batch_size, 1)
+        position_embeddings = self.position_embedding(position_idcs)
+
+        return word_embeddings+position_embeddings
+
+    def forward(self, batch_size, ctx, inputs=None, 
+                attn_mask=None, ctx_attn_mask=None,
+                mode="teacher forcing", gen_type="greedy",
+                top_k=1, top_p=1.0, temp=1.0):
+        ret_dict = {}
+
+        ## unrolling over steps
+        # use automatic unrolling in standard teacher forcing
+        if mode == TransformerDecoder.MODE_TEACHER_FORCE:
+            input_embs = self._get_embeddings(inputs)
+
+            step_ret_dict = self._step(
+                inputs=input_embs, 
+                ctx=ctx,
+                attn_mask=attn_mask,
+                ctx_attn_mask=ctx_attn_mask
+            )
+            ret_dict["logits"] = step_ret_dict["logits"]
+        # manual unrolling in free running mode
+        elif mode == TransformerDecoder.MODE_FREE_RUN:
+            # lists for collecting step products
+            step_logit_lst = []
+            step_symbol_lst = []
+
+            # bos input for the first step
+            bos_input = torch.LongTensor([self.bos_token_id]).to(DEVICE)
+            bos_input.requires_grad_(False)
+            step_inputs = bos_input.expand(batch_size, 1)
+
+            # unrolling
+            for step_idx in range(self.max_len):
+                # convert input ids to embeddings
+                step_input_embs = self._get_embeddings(step_inputs)
+
+                # take a step
+                step_ret_dict = self._step(
+                    inputs=step_input_embs, 
+                    ctx=ctx,
+                    attn_mask=None,
+                    ctx_attn_mask=ctx_attn_mask
+                )
+                # get inputs to next step
+                last_step_logits = step_ret_dict["logits"][:, -1]
+                decode_dict = self._step_decode(
+                    logits=last_step_logits, 
+                    gen_type=gen_type,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temp=temp,
+                )
+                step_symbol = decode_dict["symbol"]
+                step_inputs = torch.cat([step_inputs, step_symbol], dim=1)
+
+                # collect step productions
+                step_logit_lst.append(last_step_logits)
+                step_symbol_lst.append(step_symbol)
+
+            # organize step products
+            logits = torch.cat(step_logit_lst, dim=1)
+            symbols = torch.cat(step_symbol_lst, dim=1)
+            ret_dict["logits"] = logits
+            ret_dict["symbols"] = symbols
+
+        return ret_dict 

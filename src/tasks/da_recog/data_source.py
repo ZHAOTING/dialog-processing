@@ -42,7 +42,7 @@ class DataSource():
                 text = uttr["text"]
                 floor = uttr["floor"]
                 dialog_act = uttr["utterance_meta"]["dialog_act"]
-                tokens = self.tokenizer.convert_sent_to_tokens(text)[:self.max_uttr_len]
+                tokens = self.tokenizer.convert_string_to_tokens(text)[:self.max_uttr_len]
                 token_ids = self.tokenizer.convert_tokens_to_ids(tokens, bos_and_eos=True)
                 floor_id = ["A", "B"].index(floor)
                 dialog_act_id = self.dialog_acts.index(dialog_act)
@@ -106,7 +106,7 @@ class DataSource():
             self.cur_segment_idx += 1
 
             empty_sent = ""
-            empty_tokens = self.tokenizer.convert_sent_to_tokens(empty_sent)
+            empty_tokens = self.tokenizer.convert_string_to_tokens(empty_sent)
             empty_ids = self.tokenizer.convert_tokens_to_ids(empty_tokens, bos_and_eos=True)
             padding_uttr = {
                 "tokens": empty_tokens,

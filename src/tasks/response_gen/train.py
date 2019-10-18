@@ -18,9 +18,9 @@ from model.response_gen.vhcr import VHCR
 from model.response_gen.gpt2 import GPT2
 from utils.helpers import metric_is_improving, StatisticsReporter
 from utils.metrics import SentenceMetrics
-from tokenization.basic_tokenizer import BasicTokenizer
+from tokenization.whitespace_tokenizer import WhiteSpaceTokenizer
 from tokenization.gpt2_tokenizer import ModGPT2Tokenizer
-from .data_source import DataSource
+from tasks.response_gen.data_source import DataSource
 
 def str2bool(v):
     return v.lower() in ('true', '1', "True")
@@ -35,9 +35,10 @@ if __name__ == "__main__":
     parser.add_argument("--floor_encoder", type=str, default="none", help="floor encoder type in [none, rel, abs]")
     parser.add_argument("--use_attention", type=str2bool, default=False, help="use attention for decoder")
     parser.add_argument("--tie_weights", type=str2bool, default=True, help="tie weights for decoder")
-    parser.add_argument("--tokenizer", type=str, default="basic", help="[basic, gpt2]")
+    parser.add_argument("--tokenizer", type=str, default="ws", help="[ws, gpt2]")
 
     # model - numbers
+    parser.add_argument("--vocab_size", type=int, default=10000)
     parser.add_argument("--history_len", type=int, default=5, help="number of history sentences")
     parser.add_argument("--word_embedding_dim", type=int, default=200)
     parser.add_argument("--attr_embedding_dim", type=int, default=30)
@@ -53,16 +54,18 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="random initialization seed")
     parser.add_argument("--max_uttr_len", type=int, default=40, help="max utterance length for trauncation")
     parser.add_argument("--dropout", type=float, default=0.2, help="dropout probability")
+    parser.add_argument("--n_epochs", type=int, default=20, help="number of epochs for training")
+    parser.add_argument("--use_pretrained_word_embedding", type=str2bool, default=True)
+    parser.add_argument("--batch_size", type=int, default=30, help="batch size for training")
+    parser.add_argument("--eval_batch_size", type=int, default=60, help="batch size for evaluation")
+
+    # optimizer
     parser.add_argument("--l2_penalty", type=float, default=0.0, help="l2 penalty")
     parser.add_argument("--optimizer", type=str, default="adam", help="optimizer")
     parser.add_argument("--init_lr", type=float, default=0.001, help="init learning rate")
     parser.add_argument("--min_lr", type=float, default=1e-7, help="init learning rate")
     parser.add_argument("--lr_decay_rate", type=float, default=0.5)
     parser.add_argument("--gradient_clip", type=float, default=1.0, help="gradient clipping")
-    parser.add_argument("--n_epochs", type=int, default=20, help="number of epochs for training")
-    parser.add_argument("--use_pretrained_word_embedding", type=str2bool, default=True)
-    parser.add_argument("--batch_size", type=int, default=30, help="batch size for training")
-    parser.add_argument("--eval_batch_size", type=int, default=60, help="batch size for evaluation")
 
     # inference
     parser.add_argument("--decode_max_len", type=int, default=40, help="max utterance length for decoding")
@@ -73,7 +76,7 @@ if __name__ == "__main__":
 
     # management
     parser.add_argument("--model_path", help="path to model")
-    parser.add_argument("--corpus", type=str, default="dd", help="[dd, cornellmovie]")
+    parser.add_argument("--corpus", type=str, default="dd", help="[dd, cornellmovie, personachat]")
     parser.add_argument("--enable_log", type=str2bool, default=False)
     parser.add_argument("--save_model", type=str2bool, default=False)
     parser.add_argument("--check_loss_after_n_step", type=int, default=100)
@@ -86,6 +89,8 @@ if __name__ == "__main__":
         from corpora.dd.config import Config
     elif config.corpus == "cornellmovie":
         from corpora.cornellmovie.config import Config
+    elif config.corpus == "personachat":
+        from corpora.personachat.config import Config
     corpus_config = Config(task="response_gen")
 
     ## merge parse args with corpus config
@@ -103,8 +108,8 @@ if __name__ == "__main__":
     np.random.seed(config.seed)
 
     # tokenizers
-    if config.tokenizer == "basic":
-        tokenizer = BasicTokenizer(config.word_count_path, config.vocab_size)
+    if config.tokenizer == "ws":
+        tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
     elif config.tokenizer == "gpt2":
         tokenizer = ModGPT2Tokenizer()
 
@@ -128,7 +133,7 @@ if __name__ == "__main__":
     )
 
     # metrics calculator
-    eval_tokenizer = BasicTokenizer(config.word_count_path, config.vocab_size)
+    eval_tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
     metrics = SentenceMetrics(config.eval_word_embedding_path, eval_tokenizer)
 
     # build model
@@ -155,6 +160,14 @@ if __name__ == "__main__":
         print("----- Model loaded -----")
         print("model path: {}".format(config.model_path))
     print(str(model))
+
+    # Build lr scheduler
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer=model.optimizer,
+        mode="min",
+        factor=config.lr_decay_rate,
+        patience=2,
+    )
 
     # define logger
     MODEL_NAME = Model.__name__
@@ -185,9 +198,8 @@ if __name__ == "__main__":
 
     # here we go
     n_step = 0
-    loss_history = []
-    lr = config.init_lr
     for epoch in range(1, config.n_epochs+1):
+        lr = list(lr_scheduler.optimizer.param_groups)[0]["lr"]
         if lr <= config.min_lr:
             break
 
@@ -199,16 +211,28 @@ if __name__ == "__main__":
             if batch_data is None:
                 break
 
+            # forward
             model.train()
             if config.model in ["vhred", "vhcr"]:
-                ret_statistics = model.train_step(batch_data, lr=lr, step=n_step)
+                ret_data, ret_stat = model.train_step(batch_data, step=n_step)
             else:
-                ret_statistics = model.train_step(batch_data, lr=lr)
-            trn_reporter.update_data(ret_statistics)
-            n_step += 1
-            n_batch += 1
+                ret_data, ret_stat = model.train_step(batch_data)
 
-            # Session result output
+            # backward
+            loss = ret_data["loss"]
+            loss.backward()
+
+            # update
+            if config.gradient_clip > 0.0:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    config.gradient_clip
+                )
+            model.optimizer.step()
+            model.optimizer.zero_grad()
+            trn_reporter.update_data(ret_stat)
+
+            # check loss
             if n_step > 0 and n_step%config.check_loss_after_n_step == 0:
                 log_s = f"{time.time()-start_time:.2f}s Epoch {epoch} batch {n_batch} - "
                 log_s += trn_reporter.to_string()
@@ -225,13 +249,13 @@ if __name__ == "__main__":
                 for sample_idx in range(5):
                     batch_data = test_data_source.next(1)
 
-                    ret_dict = model.test_step(batch_data)
+                    ret_data, ret_stat = model.test_step(batch_data)
 
                     log_s = "context:\n"
                     context = batch_data["X"].tolist()[0]
                     context_floors = batch_data["X_floor"].tolist()[0]
                     for uttr, floor in zip(context, context_floors):
-                        if uttr[0] == tokenizer.pad_id:
+                        if uttr[0] == tokenizer.pad_token_id:
                             continue
                         uttr = tokenizer.convert_ids_to_tokens(
                             ids=uttr,
@@ -242,7 +266,7 @@ if __name__ == "__main__":
                         floor = "A" if floor == 1 else "B"
                         log_s += "  {}: {}\n".format(
                             floor,
-                            tokenizer.convert_tokens_to_sent(uttr)
+                            tokenizer.convert_tokens_to_string(uttr)
                         )
                     mlog(log_s)
 
@@ -258,12 +282,12 @@ if __name__ == "__main__":
                     )
                     log_s += "  {}: {}\n".format(
                         floor,
-                        tokenizer.convert_tokens_to_sent(uttr)
+                        tokenizer.convert_tokens_to_string(uttr)
                     )
                     mlog(log_s)
 
                     log_s = "hyp text:\n"
-                    hyp = ret_dict["symbols"][0].tolist()
+                    hyp = ret_data["symbols"][0].tolist()
                     hyp = tokenizer.convert_ids_to_tokens(
                         ids=hyp,
                         trim_bos=True,
@@ -271,7 +295,7 @@ if __name__ == "__main__":
                         trim_pad=True,
                     )
                     log_s += "  {}\n".format(
-                        tokenizer.convert_tokens_to_sent(hyp)
+                        tokenizer.convert_tokens_to_string(hyp)
                     )
                     log_s += "="*30
                     mlog(log_s)
@@ -289,8 +313,8 @@ if __name__ == "__main__":
                     if batch_data is None:
                         break
 
-                    ret_statistics = model.evaluate_step(batch_data)
-                    dev_reporter.update_data(ret_statistics)
+                    ret_data, ret_stat = model.evaluate_step(batch_data)
+                    dev_reporter.update_data(ret_stat)
 
                 log_s = f"\n<Dev> - {time.time()-start_time:.3f}s - "
                 log_s += dev_reporter.to_string()
@@ -307,12 +331,13 @@ if __name__ == "__main__":
                     if torch.cuda.is_available(): 
                         model = model.cuda()
 
-                loss_history.append(dev_reporter.get_value("monitor"))
+                # Decay learning rate
+                lr_scheduler.step(dev_reporter.get_value("monitor"))
                 dev_reporter.clear()
 
-                # Learning rate decay every epoch
-                if not metric_is_improving(loss_history):
-                    lr = lr*config.lr_decay_rate
+            # finished a step
+            n_step += 1
+            n_batch += 1
 
         # Evaluation on test dataset
         model.eval()
@@ -324,7 +349,7 @@ if __name__ == "__main__":
             if batch_data is None:
                 break
 
-            ret_dict = model.test_step(batch_data)
+            ret_data, ret_stat = model.test_step(batch_data)
 
             batch_refs = batch_data["Y"].tolist()
             batch_floors = batch_data["Y_floor"].tolist()
@@ -336,11 +361,11 @@ if __name__ == "__main__":
                     trim_from_eos=True,
                     trim_pad=True
                 )
-                ref = tokenizer.convert_tokens_to_sent(ref)
+                ref = tokenizer.convert_tokens_to_string(ref)
                 ref_floor = "A" if batch_floors[idx] == 1 else "B"
                 refs.append((ref, ref_floor))
 
-            batch_hyps = ret_dict["symbols"].tolist()
+            batch_hyps = ret_data["symbols"].tolist()
             for idx in range(len(batch_hyps)):
                 hyp = batch_hyps[idx]
                 hyp = tokenizer.convert_ids_to_tokens(
@@ -349,7 +374,7 @@ if __name__ == "__main__":
                     trim_from_eos=True,
                     trim_pad=True
                 )
-                hyp = tokenizer.convert_tokens_to_sent(hyp)
+                hyp = tokenizer.convert_tokens_to_string(hyp)
                 hyp_floor = "A" if batch_floors[idx] == 1 else "B"
                 hyps.append((hyp, hyp_floor))
 
@@ -374,7 +399,7 @@ if __name__ == "__main__":
             intra_types1, intra_types2, inter_types1, inter_types2 \
             = metrics.batch_div_distinct(hyp_texts)
         # Average sentence length
-        hyp_tokens_lst = [eval_tokenizer.convert_sent_to_tokens(sent) for sent in hyp_texts]
+        hyp_tokens_lst = [eval_tokenizer.convert_string_to_tokens(sent) for sent in hyp_texts]
         hyp_lens = [len(tokens) for tokens in hyp_tokens_lst]
         avg_len = np.mean(hyp_lens)
         # Output

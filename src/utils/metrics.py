@@ -47,10 +47,14 @@ class SentenceMetrics:
         self.tokenizer = tokenizer
         self.word2id = tokenizer.word2id
         self.id2word = tokenizer.id2word
-        self.id2prob = {}
-        for word, prob in tokenizer.word2prob.items():
-            if word in self.word2id:
-                self.id2prob[self.word2id[word]] = prob
+
+        if hasattr(tokenizer, "word2prob"):
+            self.id2prob = {}
+            for word, prob in tokenizer.word2prob.items():
+                if word in self.word2id:
+                    self.id2prob[self.word2id[word]] = prob
+        else:
+            self.id2prob = None
 
         with open(word_embedding_path) as f:
             self.word2vec = json.load(f)
@@ -66,7 +70,7 @@ class SentenceMetrics:
         self.emb_mat = np.array(self.emb_mat)
 
     def _sent2tokens(self, sent):
-        return self.tokenizer.convert_sent_to_tokens(sent)
+        return self.tokenizer.convert_string_to_tokens(sent)
 
     def _tokens2ids(self, tokens):
         return [self.word2id[token] for token in tokens if token in self.word2id]

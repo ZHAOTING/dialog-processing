@@ -12,7 +12,7 @@ from torch.nn import functional as F
 from model.modules.encoders import EncoderRNN
 from model.modules.decoders import DecoderRNN
 from model.modules.submodules import AbsFloorEmbEncoder, RelFloorEmbEncoder
-from model.modules.utils import init_module_weights
+from model.modules.utils import init_module_weights, init_word_embedding
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -42,6 +42,7 @@ class S2S(nn.Module):
         self.top_p = config.top_p
         self.temp = config.temp
         self.optimizer_type = config.optimizer
+        self.init_lr = config.init_lr
         self.gradient_clip = config.gradient_clip
         self.l2_penalty = config.l2_penalty
         self.use_pretrained_word_embedding = config.use_pretrained_word_embedding
@@ -51,16 +52,23 @@ class S2S(nn.Module):
         self.word2id = tokenizer.word2id
         self.id2word = tokenizer.id2word
         self.vocab_size = len(tokenizer.word2id)
-        self.pad_id = tokenizer.pad_id
-        self.bos_id = tokenizer.bos_id
-        self.eos_id = tokenizer.eos_id
+        self.pad_token_id = tokenizer.pad_token_id
+        self.bos_token_id = tokenizer.bos_token_id
+        self.eos_token_id = tokenizer.eos_token_id
 
         ## Input components
         self.word_embedding = nn.Embedding(
             self.vocab_size,
             self.word_embedding_dim,
-            padding_idx=self.pad_id,
-            _weight=self._init_word_embedding(),
+            padding_idx=self.pad_token_id,
+            _weight=init_word_embedding(
+                load_pretrained_word_embedding=self.use_pretrained_word_embedding,
+                pretrained_word_embedding_path=self.word_embedding_path,
+                id2word=self.id2word,
+                word_embedding_dim=self.word_embedding_dim,
+                vocab_size=self.vocab_size,
+                pad_token_id=self.pad_token_id
+            ),
         )
 
         ## Encoding components
@@ -89,9 +97,9 @@ class S2S(nn.Module):
             hidden_dim=self.decoder_hidden_dim,
             feat_dim=self.sent_encoder_hidden_dim,
             n_layers=self.n_decoder_layers,
-            bos_id=self.bos_id,
-            eos_id=self.eos_id,
-            pad_id=self.pad_id,
+            bos_token_id=self.bos_token_id,
+            eos_token_id=self.eos_token_id,
+            pad_token_id=self.pad_token_id,
             max_len=self.decode_max_len,
             dropout_emb=self.dropout_emb,
             dropout_input=self.dropout_input,
@@ -128,13 +136,13 @@ class S2S(nn.Module):
         if self.optimizer_type == "adam":
             self.optimizer = optim.AdamW(
                 self.parameters(),
-                lr=0.0,
+                lr=self.init_lr,
                 weight_decay=self.l2_penalty
             )
         elif self.optimizer_type == "sgd":
             self.optimizer = optim.SGD(
                 self.parameters(),
-                lr=0.0,
+                lr=self.init_lr,
                 weight_decay=self.l2_penalty
             )
 
@@ -176,7 +184,7 @@ class S2S(nn.Module):
                 ).to(DEVICE)
             )
             torch.nn.init.uniform_(weights, -1.0, 1.0)
-        weights[self.pad_id].data.fill_(0)
+        weights[self.pad_token_id].data.fill_(0)
         return weights
 
     def _init_dec_hiddens(self, context):
@@ -207,7 +215,7 @@ class S2S(nn.Module):
         assert history_len == 1
 
         inputs = inputs.view(batch_size, max_x_sent_len)
-        input_lens = (inputs != self.pad_id).sum(-1)
+        input_lens = (inputs != self.pad_token_id).sum(-1)
 
         word_encodings, _, sent_encodings = self.sent_encoder(inputs, input_lens)
         word_encodings = word_encodings.view(batch_size, max_x_sent_len, -1)
@@ -278,7 +286,7 @@ class S2S(nn.Module):
                                                map_location=lambda storage, loc: storage)
         self.load_state_dict(pretrained_state_dict)
 
-    def train_step(self, data, lr):
+    def train_step(self, data):
         """One training step
 
         Arguments:
@@ -288,9 +296,9 @@ class S2S(nn.Module):
                 Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
                 Y_floor {LongTensor [batch_size]} -- floor of response sentence
 
-            lr {float} -- learning rate
-
         Returns:
+            dict of data -- returned keys and values
+                loss {FloatTensor []} -- loss to backword
             dict of statistics -- returned keys and values
                 ppl {float} -- perplexity
                 loss {float} -- batch loss
@@ -322,26 +330,22 @@ class S2S(nn.Module):
         word_loss = F.cross_entropy(
             decoder_ret_dict["logits"].view(-1, self.vocab_size),
             Y_out.view(-1),
-            ignore_index=self.decoder.pad_id,
+            ignore_index=self.decoder.pad_token_id,
             reduction="mean"
         )
         ppl = torch.exp(word_loss)
         loss = word_loss
 
-        ## Return statistics
-        ret_statistics = {}
-        ret_statistics["ppl"] = ppl.item()
-        ret_statistics["loss"] = loss.item()
+        # return dicts
+        ret_data = {
+            "loss": loss 
+        }
+        ret_stat = {
+            "ppl": ppl.item(),
+            "loss": loss.item()
+        }
 
-        ## Backward
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = lr
-        self.optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clip)
-        self.optimizer.step()
-
-        return ret_statistics
+        return ret_data, ret_stat
 
     def evaluate_step(self, data):
         """One evaluation step
@@ -354,6 +358,8 @@ class S2S(nn.Module):
                 Y_floor {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
+            dict of data -- returned keys and values
+
             dict of statistics -- returned keys and values
                 ppl {float} -- perplexity
                 monitor {float} -- a monitor number for learning rate scheduling
@@ -385,17 +391,19 @@ class S2S(nn.Module):
             word_loss = F.cross_entropy(
                 decoder_ret_dict["logits"].view(-1, self.vocab_size),
                 Y_out.view(-1),
-                ignore_index=self.decoder.pad_id,
+                ignore_index=self.decoder.pad_token_id,
                 reduction="mean"
             )
             ppl = torch.exp(word_loss)
 
-        # return statistics
-        ret_statistics = {}
-        ret_statistics["ppl"] = ppl.item()
-        ret_statistics["monitor"] = ppl.item()
+        # return dicts
+        ret_data = {}
+        ret_stat = {
+            "ppl": ppl.item(),
+            "monitor": ppl.item()
+        }
 
-        return ret_statistics
+        return ret_data, ret_stat
 
     def test_step(self, data):
         """One test step
@@ -407,8 +415,10 @@ class S2S(nn.Module):
                 Y_floor {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
-            dict of outputs -- returned keys and values
+            dict of data -- returned keys and values
                 symbols {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
+            dict of statistics -- returned keys and values
+
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -429,4 +439,9 @@ class S2S(nn.Module):
                 attn_mask=attn_mask
             )
 
-        return decoder_ret_dict
+        ret_data = {
+            "symbols": decoder_ret_dict["symbols"]
+        }
+        ret_stat = {}
+
+        return ret_data, ret_stat

@@ -67,6 +67,7 @@ class DynamicRNN(nn.Module):
             input_lens = torch.LongTensor([L]*B).to(DEVICE)
         else:
             # avoid zero-length sequence
+            input_lens = input_lens.clone()
             input_lens.data[input_lens == 0] = 1
 
         # pack
@@ -166,6 +167,66 @@ class Attention(nn.Module):
         output = torch.tanh(self.linear_out(combined))  # [batch, query_len, query_dim]
 
         return output, attn
+
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, hidden_dim, num_heads, dropout_prob):
+        super(MultiHeadSelfAttention, self).__init__()
+
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.dropout_prob = dropout_prob
+
+        if self.hidden_dim % self.num_heads != 0:
+            raise ValueError(
+                "The hidden size (%d) is not a multiple of the number of attention "
+                "heads (%d)" % (self.hidden_dim, self.num_heads))
+
+        self.head_dim = int(self.hidden_dim / self.num_heads)
+        self.all_head_size = self.num_heads * self.head_dim
+
+        self.query = nn.Linear(self.hidden_dim, self.all_head_size)
+        self.key = nn.Linear(self.hidden_dim, self.all_head_size)
+        self.value = nn.Linear(self.hidden_dim, self.all_head_size)
+
+        self.dropout = nn.Dropout(self.dropout_prob)
+
+    def transpose_for_scores(self, x):
+        new_x_shape = x.size()[:-1] + (self.num_heads, self.head_dim)
+        x = x.view(*new_x_shape)
+        return x.permute(0, 2, 1, 3)
+
+    def forward(self, inputs, attn_mask):
+        mixed_query_layer = self.query(inputs)
+        mixed_key_layer = self.key(inputs)
+        mixed_value_layer = self.value(inputs)
+
+        query_layer = self.transpose_for_scores(mixed_query_layer)
+        key_layer = self.transpose_for_scores(mixed_key_layer)
+        value_layer = self.transpose_for_scores(mixed_value_layer)
+
+        # Take the dot product between "query" and "key" to get the raw attention scores.
+        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        attention_scores = attention_scores / math.sqrt(self.head_dim)
+        # Apply the attention mask
+        ignore_mask = 1 - attn_mask.unsqueeze(1).unsqueeze(2).float()
+        ignore_mask2scores = ignore_mask * (-10000.0)
+        attention_scores = attention_scores + ignore_mask2scores
+
+        # Normalize the attention scores to probabilities.
+        attention_probs = nn.Softmax(dim=-1)(attention_scores)
+
+        # This is actually dropping out entire tokens to attend to, which might
+        # seem a bit unusual, but is taken from the original Transformer paper.
+        attention_probs = self.dropout(attention_probs)
+
+        context_layer = torch.matmul(attention_probs, value_layer)
+
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+        context_layer = context_layer.view(*new_context_layer_shape)
+
+        return context_layer, attention_probs
 
 ## Floor encoders
 class AbsFloorOneHotEncoder(nn.Module):

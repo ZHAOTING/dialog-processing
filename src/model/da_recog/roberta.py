@@ -20,7 +20,7 @@ class Roberta(nn.Module):
         ## Load pretrained gpt2 model
         model_size = config.model_size
         assert model_size in ["base", "large", "large-mnli"]
-        from pytorch_transformers import RobertaForSequenceClassification
+        from transformers import RobertaForSequenceClassification
         pretrained = RobertaForSequenceClassification.from_pretrained(f'roberta-{model_size}')
         pretrained.resize_token_embeddings(len(tokenizer))
         self.roberta = pretrained.roberta
@@ -29,14 +29,15 @@ class Roberta(nn.Module):
         # Attributes from config
         self.gradient_clip = config.gradient_clip
         self.num_labels = len(config.dialog_acts)
+        self.init_lr = config.init_lr
         # Other attributes
         self.tokenizer = tokenizer
         self.vocab_size = len(tokenizer)
-        self.sep_id = tokenizer.sep_id
-        self.cls_id = tokenizer.cls_id
-        self.pad_id = tokenizer.pad_id
-        self.speaker1_id = tokenizer.speaker1_id
-        self.speaker2_id = tokenizer.speaker2_id
+        self.sep_token_id = tokenizer.sep_token_id
+        self.cls_token_id = tokenizer.cls_token_id
+        self.pad_token_id = tokenizer.pad_token_id
+        self.speaker1_token_id = tokenizer.speaker1_token_id
+        self.speaker2_token_id = tokenizer.speaker2_token_id
         self.hidden_dim = self.roberta.config.hidden_size
         self.hidden_dropout_prob = self.roberta.config.hidden_dropout_prob
         self.l2_penalty = 0.01  # according to the Roberta paper
@@ -62,7 +63,7 @@ class Roberta(nn.Module):
     def _set_optimizer(self):
         self.optimizer = optim.AdamW(
             self.parameters(),
-            lr=0.0,
+            lr=self.init_lr,
             weight_decay=self.l2_penalty
         )
 
@@ -74,7 +75,7 @@ class Roberta(nn.Module):
         """
 
         ## Use lists instead of tensors to speed up
-        input_lens = (inputs != self.pad_id).sum(-1)
+        input_lens = (inputs != self.pad_token_id).sum(-1)
         dial_lens = (input_lens > 0).sum(dim=1).tolist()
         inputs = inputs.tolist()
         input_lens = input_lens.tolist()
@@ -92,7 +93,7 @@ class Roberta(nn.Module):
 
                 src_speaker = input_floors[dial_idx][sent_idx]
                 tgt_speaker = output_floors[dial_idx]
-                speaker_token_id = self.speaker1_id if src_speaker == tgt_speaker else self.speaker2_id
+                speaker_token_id = self.speaker1_token_id if src_speaker == tgt_speaker else self.speaker2_token_id
 
                 ctx_input_ids += ([speaker_token_id] + sent_token_ids)
 
@@ -100,10 +101,10 @@ class Roberta(nn.Module):
             sent_idx = dial_lens[dial_idx]-1
             sent_len = input_lens[dial_idx][sent_idx]
             sent_token_ids = inputs[dial_idx][sent_idx][:sent_len]
-            response_input_ids = [self.speaker1_id] + sent_token_ids
+            response_input_ids = [self.speaker1_token_id] + sent_token_ids
 
             # concat context and response
-            input_token_id_seq = [self.cls_id] + ctx_input_ids + [self.sep_id] + [self.sep_id] + response_input_ids + [self.sep_id]
+            input_token_id_seq = [self.cls_token_id] + ctx_input_ids + [self.sep_token_id] + [self.sep_token_id] + response_input_ids + [self.sep_token_id]
             input_token_id_seqs.append(input_token_id_seq)
 
         ## Get lengths
@@ -114,7 +115,7 @@ class Roberta(nn.Module):
         attention_masks = [[1]*len(seq) + [0]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
 
         ## Pad sequences and produce tensors
-        input_token_id_seqs = [seq + [self.pad_id]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
+        input_token_id_seqs = [seq + [self.pad_token_id]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
         input_token_id_seqs = torch.LongTensor(input_token_id_seqs).to(DEVICE)
         attention_masks = torch.LongTensor(attention_masks).to(DEVICE)
 
@@ -149,7 +150,7 @@ class Roberta(nn.Module):
                 map_location=lambda storage, loc: storage)
         self.load_state_dict(pretrained_state_dict)
 
-    def train_step(self, data, lr):
+    def train_step(self, data):
         """One training step
 
         Arguments:
@@ -158,9 +159,9 @@ class Roberta(nn.Module):
                 Y_floor {LongTensor [batch_size]} -- floor of target sentence
                 Y_da {LongTensor [batch_size]} -- dialog acts of target sentence
 
-            lr {float} -- learning rate
-
         Returns:
+            dict of data -- returned keys and values
+                loss {FloatTensor []} -- loss tensor to backward
             dict of statistics -- returned keys and values
                 loss {float} -- batch loss
         """
@@ -187,20 +188,15 @@ class Roberta(nn.Module):
             reduction="mean"
         )
 
-        ## Return statistics
-        ret_statistics = {
+        ## Return dicts
+        ret_data = {
+            "loss": loss,
+        }
+        ret_stat = {
             "loss": loss.item()
         }
 
-        ## Backward
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = lr
-        self.optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clip)
-        self.optimizer.step()
-
-        return ret_statistics
+        return ret_data, ret_stat
 
     def evaluate_step(self, data):
         """One evaluation step
@@ -243,14 +239,12 @@ class Roberta(nn.Module):
                 reduction="mean"
             )
 
-        # return outputs
-        ret_outputs = {
+        # return dicts
+        ret_data = {
             "labels": labels
         }
-
-        ## Return statistics
-        ret_statistics = {
+        ret_stat = {
             "monitor": loss.item()
         }
 
-        return ret_outputs, ret_statistics
+        return ret_data, ret_stat

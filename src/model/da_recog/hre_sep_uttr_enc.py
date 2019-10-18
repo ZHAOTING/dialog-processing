@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch.nn import functional as F
 
 from model.modules.encoders import EncoderRNN
-from model.modules.utils import init_module_weights
+from model.modules.utils import init_module_weights, init_word_embedding
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -34,6 +34,7 @@ class HRESepUttrEnc(nn.Module):
         self.dropout_output = config.dropout
         self.rnn_type = config.rnn_type
         self.optimizer_type = config.optimizer
+        self.init_lr = config.init_lr
         self.gradient_clip = config.gradient_clip
         self.l2_penalty = config.l2_penalty
         self.use_pretrained_word_embedding = config.use_pretrained_word_embedding
@@ -43,14 +44,21 @@ class HRESepUttrEnc(nn.Module):
         self.word2id = tokenizer.word2id
         self.id2word = tokenizer.id2word
         self.vocab_size = len(tokenizer.word2id)
-        self.pad_id = tokenizer.pad_id
+        self.pad_token_id = tokenizer.pad_token_id
 
         ## Input components
         self.word_embedding = nn.Embedding(
             self.vocab_size,
             self.word_embedding_dim,
-            padding_idx=self.pad_id,
-            _weight=self._init_word_embedding(),
+            padding_idx=self.pad_token_id,
+            _weight=init_word_embedding(
+                load_pretrained_word_embedding=self.use_pretrained_word_embedding,
+                pretrained_word_embedding_path=self.word_embedding_path,
+                id2word=self.id2word,
+                word_embedding_dim=self.word_embedding_dim,
+                vocab_size=self.vocab_size,
+                pad_token_id=self.pad_token_id
+            ),
         )
 
         ## Encoding components
@@ -105,13 +113,13 @@ class HRESepUttrEnc(nn.Module):
         if self.optimizer_type == "adam":
             self.optimizer = optim.AdamW(
                 self.parameters(),
-                lr=0.0,
+                lr=self.init_lr,
                 weight_decay=self.l2_penalty
             )
         elif self.optimizer_type == "sgd":
             self.optimizer = optim.SGD(
                 self.parameters(),
-                lr=0.0,
+                lr=self.init_lr,
                 weight_decay=self.l2_penalty
             )
 
@@ -153,7 +161,7 @@ class HRESepUttrEnc(nn.Module):
                 ).to(DEVICE)
             )
             torch.nn.init.uniform_(weights, -1.0, 1.0)
-        weights[self.pad_id].data.fill_(0)
+        weights[self.pad_token_id].data.fill_(0)
         return weights
 
 
@@ -162,7 +170,7 @@ class HRESepUttrEnc(nn.Module):
 
         # own and others' sentence encodings
         flat_inputs = inputs.view(batch_size*history_len, max_x_sent_len)
-        input_lens = (inputs != self.pad_id).sum(-1)
+        input_lens = (inputs != self.pad_token_id).sum(-1)
         flat_input_lens = input_lens.view(batch_size*history_len)
         own_word_encodings, _, own_sent_encodings = self.own_sent_encoder(flat_inputs, flat_input_lens)
         oth_word_encodings, _, oth_sent_encodings = self.oth_sent_encoder(flat_inputs, flat_input_lens)
@@ -207,7 +215,7 @@ class HRESepUttrEnc(nn.Module):
                                                map_location=lambda storage, loc: storage)
         self.load_state_dict(pretrained_state_dict)
 
-    def train_step(self, data, lr):
+    def train_step(self, data):
         """One training step
 
         Arguments:
@@ -217,9 +225,9 @@ class HRESepUttrEnc(nn.Module):
                 Y_floor {LongTensor [batch_size]} -- floor of target sentence
                 Y_da {LongTensor [batch_size]} -- dialog acts of target sentence
 
-            lr {float} -- learning rate
-
         Returns:
+            dict of data -- returned keys and values
+                loss {FloatTensor []} -- loss tensor to backward
             dict of statistics -- returned keys and values
                 loss {float} -- batch loss
         """
@@ -242,20 +250,15 @@ class HRESepUttrEnc(nn.Module):
             reduction="mean"
         )
 
-        ## Return statistics
-        ret_statistics = {
+        ## Return dicts
+        ret_data = {
+            "loss": loss,
+        }
+        ret_stat = {
             "loss": loss.item()
         }
 
-        ## Backward
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = lr
-        self.optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clip)
-        self.optimizer.step()
-
-        return ret_statistics
+        return ret_data, ret_stat
 
     def evaluate_step(self, data):
         """One evaluation step
@@ -294,14 +297,12 @@ class HRESepUttrEnc(nn.Module):
                 reduction="mean"
             )
 
-        # return outputs
-        ret_outputs = {
+        # return dicts
+        ret_data = {
             "labels": labels
         }
-
-        # return statistics
-        ret_statistics = {
+        ret_stat = {
             "monitor": loss.item()
         }
 
-        return ret_outputs, ret_statistics
+        return ret_data, ret_stat

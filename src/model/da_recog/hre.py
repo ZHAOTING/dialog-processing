@@ -11,7 +11,7 @@ from torch.nn import functional as F
 
 from model.modules.encoders import EncoderRNN
 from model.modules.submodules import AbsFloorEmbEncoder, RelFloorEmbEncoder
-from model.modules.utils import init_module_weights
+from model.modules.utils import init_module_weights, init_word_embedding
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -34,6 +34,7 @@ class HRE(nn.Module):
         self.dropout_output = config.dropout
         self.rnn_type = config.rnn_type
         self.optimizer_type = config.optimizer
+        self.init_lr = config.init_lr
         self.gradient_clip = config.gradient_clip
         self.l2_penalty = config.l2_penalty
         self.use_pretrained_word_embedding = config.use_pretrained_word_embedding
@@ -43,14 +44,21 @@ class HRE(nn.Module):
         self.word2id = tokenizer.word2id
         self.id2word = tokenizer.id2word
         self.vocab_size = len(tokenizer.word2id)
-        self.pad_id = tokenizer.pad_id
+        self.pad_token_id = tokenizer.pad_token_id
 
         ## Input components
         self.word_embedding = nn.Embedding(
             self.vocab_size,
             self.word_embedding_dim,
-            padding_idx=self.pad_id,
-            _weight=self._init_word_embedding(),
+            padding_idx=self.pad_token_id,
+            _weight=init_word_embedding(
+                load_pretrained_word_embedding=self.use_pretrained_word_embedding,
+                pretrained_word_embedding_path=self.word_embedding_path,
+                id2word=self.id2word,
+                word_embedding_dim=self.word_embedding_dim,
+                vocab_size=self.vocab_size,
+                pad_token_id=self.pad_token_id
+            ),
         )
 
         ## Encoding components
@@ -108,13 +116,13 @@ class HRE(nn.Module):
         if self.optimizer_type == "adam":
             self.optimizer = optim.AdamW(
                 self.parameters(),
-                lr=0.0,
+                lr=self.init_lr,
                 weight_decay=self.l2_penalty
             )
         elif self.optimizer_type == "sgd":
             self.optimizer = optim.SGD(
                 self.parameters(),
-                lr=0.0,
+                lr=self.init_lr,
                 weight_decay=self.l2_penalty
             )
 
@@ -133,37 +141,11 @@ class HRE(nn.Module):
     def _init_weights(self):
         init_module_weights(self.output_fc)
 
-    def _init_word_embedding(self):
-        if self.use_pretrained_word_embedding:
-            embeddings = []
-            pretrained_embeddings = json.load(open(self.word_embedding_path))
-            in_vocab_cnt = 0
-            for word_id in range(len(self.id2word)):
-                word = self.id2word[word_id]
-                if word in pretrained_embeddings:
-                    embeddings.append(pretrained_embeddings[word])
-                    in_vocab_cnt += 1
-                else:
-                    embeddings.append([0.0]*self.word_embedding_dim)
-            weights = nn.Parameter(torch.FloatTensor(embeddings).to(DEVICE))
-            print("{}/{} pretrained word embedding in vocab".
-                  format(in_vocab_cnt, self.vocab_size))
-        else:
-            weights = nn.Parameter(
-                torch.FloatTensor(
-                    self.vocab_size,
-                    self.word_embedding_dim
-                ).to(DEVICE)
-            )
-            torch.nn.init.uniform_(weights, -1.0, 1.0)
-        weights[self.pad_id].data.fill_(0)
-        return weights
-
     def _encode(self, inputs, input_floors, output_floors):
         batch_size, history_len, max_x_sent_len = inputs.size()
 
         flat_inputs = inputs.view(batch_size*history_len, max_x_sent_len)
-        input_lens = (inputs != self.pad_id).sum(-1)
+        input_lens = (inputs != self.pad_token_id).sum(-1)
         flat_input_lens = input_lens.view(batch_size*history_len)
         word_encodings, _, sent_encodings = self.sent_encoder(flat_inputs, flat_input_lens)
         word_encodings = word_encodings.view(batch_size, history_len, max_x_sent_len, -1)
@@ -198,7 +180,7 @@ class HRE(nn.Module):
                                                map_location=lambda storage, loc: storage)
         self.load_state_dict(pretrained_state_dict)
 
-    def train_step(self, data, lr):
+    def train_step(self, data):
         """One training step
 
         Arguments:
@@ -208,9 +190,9 @@ class HRE(nn.Module):
                 Y_floor {LongTensor [batch_size]} -- floor of target sentence
                 Y_da {LongTensor [batch_size]} -- dialog acts of target sentence
 
-            lr {float} -- learning rate
-
         Returns:
+            dict of data -- returned keys and values
+                loss {FloatTensor []} -- loss tensor to backward
             dict of statistics -- returned keys and values
                 loss {float} -- batch loss
         """
@@ -233,20 +215,15 @@ class HRE(nn.Module):
             reduction="mean"
         )
 
-        ## Return statistics
-        ret_statistics = {
+        ## Return dicts
+        ret_data = {
+            "loss": loss,
+        }
+        ret_stat = {
             "loss": loss.item()
         }
 
-        ## Backward
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = lr
-        self.optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clip)
-        self.optimizer.step()
-
-        return ret_statistics
+        return ret_data, ret_stat
 
     def evaluate_step(self, data):
         """One evaluation step
@@ -285,14 +262,12 @@ class HRE(nn.Module):
                 reduction="mean"
             )
 
-        # return outputs
-        ret_outputs = {
+        # return dicts
+        ret_data = {
             "labels": labels
         }
-
-        # return statistics
-        ret_statistics = {
+        ret_stat = {
             "monitor": loss.item()
         }
 
-        return ret_outputs, ret_statistics
+        return ret_data, ret_stat

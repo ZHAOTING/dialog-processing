@@ -15,9 +15,9 @@ from model.da_recog.hre_sep_uttr_enc import HRESepUttrEnc
 from model.da_recog.roberta import Roberta
 from utils.helpers import metric_is_improving, StatisticsReporter
 from utils.metrics import ClassificationMetrics
-from tokenization.basic_tokenizer import BasicTokenizer
+from tokenization.whitespace_tokenizer import WhiteSpaceTokenizer
 from tokenization.roberta_tokenizer import ModRobertaTokenizer
-from .data_source import DataSource
+from tasks.da_recog.data_source import DataSource
 
 def str2bool(v):
     return v.lower() in ('true', '1', "True")
@@ -30,9 +30,10 @@ if __name__ == "__main__":
     parser.add_argument("--model_size", type=str, default="large-mnli", help="model type for roberta, in [base, large, large-mnli]")
     parser.add_argument("--rnn_type", type=str, default="lstm", help="[gru, lstm]")
     parser.add_argument("--floor_encoder", type=str, default="none", help="floor encoder type in [none, rel, abs]")
-    parser.add_argument("--tokenizer", type=str, default="basic", help="[basic, roberta]")
+    parser.add_argument("--tokenizer", type=str, default="ws", help="[ws, roberta]")
 
     # model - numbers
+    parser.add_argument("--vocab_size", type=int, default=10000)
     parser.add_argument("--history_len", type=int, default=5, help="number of history sentences")
     parser.add_argument("--word_embedding_dim", type=int, default=200)
     parser.add_argument("--attr_embedding_dim", type=int, default=30)
@@ -85,8 +86,8 @@ if __name__ == "__main__":
     np.random.seed(config.seed)
 
     # tokenizers
-    if config.tokenizer == "basic":
-        tokenizer = BasicTokenizer(config.word_count_path, config.vocab_size)
+    if config.tokenizer == "ws":
+        tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
     elif config.tokenizer == "roberta":
         tokenizer = ModRobertaTokenizer(config.model_size)
 
@@ -131,6 +132,14 @@ if __name__ == "__main__":
         print(f"model path: {config.model_path}")
     print(str(model))
 
+    # Build lr scheduler
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer=model.optimizer,
+        mode="min",
+        factor=config.lr_decay_rate,
+        patience=2,
+    )
+
     # define logger
     MODEL_NAME = Model.__name__
     LOG_FILE_NAME = "{}.floor_{}.seed_{}.{}".format(
@@ -156,9 +165,8 @@ if __name__ == "__main__":
 
     # here we go
     n_step = 0
-    loss_history = []
-    lr = config.init_lr
     for epoch in range(1, config.n_epochs+1):
+        lr = list(lr_scheduler.optimizer.param_groups)[0]["lr"]
         if lr <= config.min_lr:
             break
 
@@ -170,11 +178,24 @@ if __name__ == "__main__":
             if batch_data is None:
                 break
 
+            # Forward
             model.train()
-            ret_statistics = model.train_step(batch_data, lr=lr)
-            trn_reporter.update_data(ret_statistics)
-            n_step += 1
-            n_batch += 1
+            ret_data, ret_stat = model.train_step(batch_data)
+            trn_reporter.update_data(ret_stat)
+
+            # Backward
+            loss = ret_data["loss"]
+            loss.backward()
+            if config.gradient_clip > 0.0:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    config.gradient_clip
+                )
+            model.optimizer.step()
+            model.optimizer.zero_grad()
+
+            # update
+            trn_reporter.update_data(ret_stat)
 
             # Check loss
             if n_step > 0 and n_step%config.check_loss_after_n_step == 0:
@@ -197,9 +218,9 @@ if __name__ == "__main__":
                     if batch_data is None:
                         break
 
-                    ret_outputs, ret_statistics = model.evaluate_step(batch_data)
-                    dev_reporter.update_data(ret_statistics)
-                    pred_labels += ret_outputs["labels"].tolist()
+                    ret_data, ret_stat = model.evaluate_step(batch_data)
+                    dev_reporter.update_data(ret_stat)
+                    pred_labels += ret_data["labels"].tolist()
                     true_labels += batch_data["Y_da"].tolist()
 
                 log_s = f"\n<Dev> - {time.time()-start_time:.3f}s - "
@@ -227,12 +248,13 @@ if __name__ == "__main__":
                     if torch.cuda.is_available():
                         model = model.cuda()
 
-                loss_history.append(dev_reporter.get_value("monitor"))
+                # Decay learning rate
+                lr_scheduler.step(dev_reporter.get_value("monitor"))
                 dev_reporter.clear()
 
-                # Decay learning rate
-                if not metric_is_improving(loss_history):
-                    lr = lr*config.lr_decay_rate
+            # Finished a step
+            n_batch += 1
+            n_step += 1
         
         # Evaluate on test dataset every epoch
         model.eval()
@@ -243,8 +265,8 @@ if __name__ == "__main__":
             if batch_data is None:
                 break
 
-            ret_outputs, ret_statistics = model.evaluate_step(batch_data)
-            pred_labels += ret_outputs["labels"].tolist()
+            ret_data, ret_stat = model.evaluate_step(batch_data)
+            pred_labels += ret_data["labels"].tolist()
             true_labels += batch_data["Y_da"].tolist()
 
         log_s = f"\n<Test> - {time.time()-start_time:.3f}s -"

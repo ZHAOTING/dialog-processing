@@ -20,10 +20,6 @@ raw_data_dir = config.raw_data_dir
 zipfile_path = f"{config.raw_data_dir}/dailydialog.zip"
 extracted_dir = f"{config.raw_data_dir}/dailydialog"
 
-dialog_act_d = {1: "inform", 2: "question", 3: "directive", 4: "commissive"}
-emotion_d = {0: "neutral", 1: "anger", 2: "disgust", 3: "fear", 4: "happiness", 5: "sadness", 6: "surprise"}
-topic_d = {1: "Ordinary Life", 2: "School Life", 3: "Culture & Education", 4: "Attitude & Emotion", 5: "Relationship", 6: "Tourism", 7: "Health", 8: "Work", 9: "Politics", 10: "Finance"}
-
 def clean_dd_text(text):
     text = standardize_english_text(text)
     text = re.sub(r"(\w)n ' (t\W)", r"\1 n'\2", text)
@@ -33,11 +29,9 @@ def clean_dd_text(text):
 def download_data():
     """Download and unpack dialogs"""
 
-    zip_url = "http://yanran.li/files/ijcnlp_dailydialog.zip"
-
     if not os.path.exists(zipfile_path):
-        print(f'Downloading {zip_url} to {zipfile_path}')
-        urlretrieve(zip_url, zipfile_path)
+        print(f'Downloading {config.download_url} to {zipfile_path}')
+        urlretrieve(config.download_url, zipfile_path)
         print(f'Successfully downloaded {zipfile_path}')
 
         zip_ref = ZipFile(zipfile_path, 'r')
@@ -166,13 +160,13 @@ if __name__ == "__main__":
         session = {
             "utterances": [],
             "dialog_meta": {
-                "topic": topic_d[int(topic)]
+                "topic": config.id2topic[int(topic)]
             }
         }
         speaker_idx = 0
         for uttr_text, dialog_act, emotion in zip(uttrs, dialog_acts, emotions):
-            dialog_act = dialog_act_d[int(dialog_act)]
-            emotion = emotion_d[int(emotion)]
+            dialog_act = config.id2dialog_act[int(dialog_act)]
+            emotion = config.id2emotion[int(emotion)]
             floor = ["A", "B"][speaker_idx]
             speaker_idx = 1 - speaker_idx
 

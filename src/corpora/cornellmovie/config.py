@@ -1,6 +1,7 @@
 class Config(object):
     def __init__(self, task):
-        self.vocab_size = 20000
+        ## Data processing
+        self.download_url = "http://www.mpi-sws.org/~cristian/data/cornell_movie_dialogs_corpus.zip"
 
         ## Management
         self.raw_data_dir = "../data/cornellmovie/raw_data"

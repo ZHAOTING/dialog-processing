@@ -3,7 +3,12 @@ class Config(object):
         self.dialog_acts = ["<pad>", "inform", "question", "directive", "commissive"]
         self.emotions = ["neutral", "anger", "disgust", "fear", "happiness", "sadness", "surprise"]
         self.topics = ["Ordinary Life", "School Life", "Culture & Education", "Attitude & Emotion", "Relationship", "Tourism", "Health", "Work", "Politics", "Finance"]
-        self.vocab_size = 10000
+
+        ## Data processing
+        self.download_url = "http://yanran.li/files/ijcnlp_dailydialog.zip"
+        self.id2dialog_act = {1: "inform", 2: "question", 3: "directive", 4: "commissive"}
+        self.id2topic = {1: "Ordinary Life", 2: "School Life", 3: "Culture & Education", 4: "Attitude & Emotion", 5: "Relationship", 6: "Tourism", 7: "Health", 8: "Work", 9: "Politics", 10: "Finance"}
+        self.id2emotion = {0: "neutral", 1: "anger", 2: "disgust", 3: "fear", 4: "happiness", 5: "sadness", 6: "surprise"}
 
         ## Management
         self.raw_data_dir = "../data/dd/raw_data"
@@ -17,3 +22,4 @@ class Config(object):
         ## Pretrained embeddings (for initialization and evaluation)
         self.word_embedding_path = f"{self.task_data_dir}/glove_twitter_200.json"
         self.eval_word_embedding_path = f"{self.task_data_dir}/google_news_300.json"
+

@@ -30,10 +30,9 @@ def clean_cornellmovie_text(text):
 def download_data():
     """Download and unpack dialogs"""
 
-    zip_url = "http://www.mpi-sws.org/~cristian/data/cornell_movie_dialogs_corpus.zip"
     if not os.path.exists(zipfile_path):
-        print(f'Downloading {zip_url} to {zipfile_path}')
-        urlretrieve(zip_url, zipfile_path)
+        print(f'Downloading {config.download_url} to {zipfile_path}')
+        urlretrieve(config.download_url, zipfile_path)
         print(f'Successfully downloaded {zipfile_path}')
 
         zip_ref = ZipFile(zipfile_path, 'r')

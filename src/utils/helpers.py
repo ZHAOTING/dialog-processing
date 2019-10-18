@@ -36,7 +36,7 @@ def standardize_english_text(string):
     string = re.sub(r'—|–|―', '-', string)
     string = re.sub(r'…', '...', string)
     string = re.sub(r'[`´]', "'", string)
-    string = re.sub(r"[^A-Za-z0-9,!?\'\.\<\>\"]", " ", string)
+    string = re.sub(r"[^A-Za-z0-9,!?/()\'\.\<\>\"]", " ", string)
     string = re.sub(r"\.{3}", " ...", string)
     string = string.replace("\'m", " \'m")
     string = string.replace("\'s", " \'s")
@@ -78,7 +78,8 @@ class StatisticsReporter:
 
     def update_data(self, d):
         for k, v in d.items():
-            self.statistics[k] += [v]
+            if isinstance(v, (int, float)):
+                self.statistics[k] += [v]
 
     def clear(self):
         self.statistics = collections.defaultdict(list)

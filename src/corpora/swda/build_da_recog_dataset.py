@@ -32,11 +32,9 @@ def clean_swda_text(text):
 def download_data():
     """Download and unpack dialogs"""
 
-    zip_url = "http://compprag.christopherpotts.net/code-data/swda.zip"
-
     if not os.path.exists(zipfile_path):
-        print(f'Downloading {zip_url} to {zipfile_path}')
-        urlretrieve(zip_url, zipfile_path)
+        print(f'Downloading {config.download_url} to {zipfile_path}')
+        urlretrieve(config.download_url, zipfile_path)
         print(f'Successfully downloaded {zipfile_path}')
 
     zip_ref = ZipFile(zipfile_path, 'r')

@@ -23,7 +23,7 @@ class GPT2(nn.Module):
         super(GPT2, self).__init__()
 
         ## Load pretrained gpt2 model
-        from pytorch_transformers import GPT2LMHeadModel
+        from transformers import GPT2LMHeadModel
         if config.model_size == "small":
             pretrained = GPT2LMHeadModel.from_pretrained('gpt2')
         elif config.model_size == "medium":
@@ -34,6 +34,7 @@ class GPT2(nn.Module):
 
         ## Attributes
         # Attributes from config
+        self.init_lr = config.init_lr
         self.gradient_clip = config.gradient_clip
         self.decode_max_len = config.decode_max_len
         self.gen_type = config.gen_type
@@ -45,11 +46,11 @@ class GPT2(nn.Module):
         self.tokenizer = tokenizer
         self.vocab_size = len(tokenizer)
         self.embedding_dim = self.transformer.config.n_embd
-        self.bos_id = tokenizer.bos_id
-        self.eos_id = tokenizer.eos_id
-        self.pad_id = tokenizer.pad_id
-        self.speaker1_id = tokenizer.speaker1_id
-        self.speaker2_id = tokenizer.speaker2_id
+        self.bos_token_id = tokenizer.bos_token_id
+        self.eos_token_id = tokenizer.eos_token_id
+        self.pad_token_id = tokenizer.pad_token_id
+        self.speaker1_token_id = tokenizer.speaker1_token_id
+        self.speaker2_token_id = tokenizer.speaker2_token_id
 
         ## Embedding componenets
         self.word_embedding = self.transformer.wte
@@ -61,7 +62,7 @@ class GPT2(nn.Module):
     def _set_optimizer(self):
         self.optimizer = optim.AdamW(
             self.parameters(),
-            lr=0.0,
+            lr=self.init_lr,
             weight_decay=self.l2_penalty
         )
 
@@ -72,14 +73,14 @@ class GPT2(nn.Module):
         """
 
         ## Use lists instead of tensors to speed up
-        input_lens = (inputs != self.pad_id).sum(-1)
+        input_lens = (inputs != self.pad_token_id).sum(-1)
         dial_lens = (input_lens > 0).sum(dim=1).tolist()
         inputs = inputs.tolist()
         input_lens = input_lens.tolist()
         input_floors = input_floors.tolist()
         output_floors = output_floors.tolist()
         if not sample_mode:
-            output_lens = (outputs != self.pad_id).sum(-1)
+            output_lens = (outputs != self.pad_token_id).sum(-1)
             outputs = outputs.tolist()
             output_lens = output_lens.tolist()
        
@@ -96,23 +97,23 @@ class GPT2(nn.Module):
 
                 src_speaker = input_floors[dial_idx][sent_idx]
                 tgt_speaker = output_floors[dial_idx]
-                speaker_token_id = self.speaker1_id if src_speaker == tgt_speaker else self.speaker2_id
+                speaker_token_id = self.speaker1_token_id if src_speaker == tgt_speaker else self.speaker2_token_id
 
                 ctx_input_ids += ([speaker_token_id] + sent_token_ids)
 
             # input token ids
             if sample_mode:
-                response_input_ids = [self.speaker1_id, self.bos_id]
+                response_input_ids = [self.speaker1_token_id, self.bos_token_id]
             else:
                 response_len = output_lens[dial_idx]
-                response_input_ids = [self.speaker1_id] + outputs[dial_idx][:response_len-1]
+                response_input_ids = [self.speaker1_token_id] + outputs[dial_idx][:response_len-1]
             input_token_id_seq = ctx_input_ids+response_input_ids
             input_token_id_seqs.append(input_token_id_seq)
 
             # output token ids
             if not sample_mode:
-                ctx_output_ids = [self.pad_id]*len(ctx_input_ids)
-                response_output_ids = [self.pad_id] + outputs[dial_idx][1:response_len]
+                ctx_output_ids = [self.pad_token_id]*len(ctx_input_ids)
+                response_output_ids = [self.pad_token_id] + outputs[dial_idx][1:response_len]
                 output_token_id_seq = ctx_output_ids+response_output_ids
                 output_token_id_seqs.append(output_token_id_seq)
 
@@ -127,8 +128,8 @@ class GPT2(nn.Module):
         max_seq_len = max(seq_lens)
 
         ## pad sequences and produce tensors
-        input_token_id_seqs = [seq + [self.pad_id]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
-        output_token_id_seqs = [seq + [self.pad_id]*(max_seq_len-len(seq)) for seq in output_token_id_seqs]
+        input_token_id_seqs = [seq + [self.pad_token_id]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
+        output_token_id_seqs = [seq + [self.pad_token_id]*(max_seq_len-len(seq)) for seq in output_token_id_seqs]
         position_id_seqs = [seq + [0]*(max_seq_len-len(seq)) for seq in position_id_seqs]
         input_token_id_seqs = torch.LongTensor(input_token_id_seqs).to(DEVICE)
         output_token_id_seqs = torch.LongTensor(output_token_id_seqs).to(DEVICE)
@@ -271,7 +272,7 @@ class GPT2(nn.Module):
 
         output_lens = [len(seq) for seq in symbols]
         max_output_len = max(output_lens)
-        symbols = [seq + [self.pad_id]*(max_output_len-len(seq)) for seq in symbols]
+        symbols = [seq + [self.pad_token_id]*(max_output_len-len(seq)) for seq in symbols]
         symbols = torch.LongTensor(symbols).to(DEVICE)
 
         return symbols
@@ -289,7 +290,7 @@ class GPT2(nn.Module):
                 map_location=lambda storage, loc: storage)
         self.load_state_dict(pretrained_state_dict)
 
-    def train_step(self, data, lr):
+    def train_step(self, data):
         """One training step
 
         Arguments:
@@ -299,9 +300,9 @@ class GPT2(nn.Module):
                 Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
                 Y_floor {LongTensor [batch_size]} -- floor of response sentence
 
-            lr {float} -- learning rate
-
         Returns:
+            dict of data -- returned keys and values
+                loss {FloatTensor []} -- loss to backword
             dict of statistics -- returned keys and values
                 ppl {float} -- perplexity
                 loss {float} -- batch loss
@@ -327,26 +328,22 @@ class GPT2(nn.Module):
         word_loss = F.cross_entropy(
             logits.view(-1, self.vocab_size),
             output_labels.view(-1),
-            ignore_index=self.pad_id,
+            ignore_index=self.pad_token_id,
             reduction="mean"
         )
         ppl = torch.exp(word_loss)
         loss += word_loss
 
-        # return statistics
-        ret_statistics = {}
-        ret_statistics["ppl"] = ppl.item()
-        ret_statistics["loss"] = loss.item()
+        # return dicts
+        ret_data = {
+            "loss": loss 
+        }
+        ret_stat = {
+            "ppl": ppl.item(),
+            "loss": loss.item()
+        }
 
-        # backward
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = lr
-        self.optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clip)
-        self.optimizer.step()
-
-        return ret_statistics
+        return ret_data, ret_stat
 
     def evaluate_step(self, data):
         """One evaluation step
@@ -359,6 +356,8 @@ class GPT2(nn.Module):
                 Y_floor {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
+            dict of data -- returned keys and values
+
             dict of statistics -- returned keys and values
                 ppl {float} -- perplexity
                 monitor {float} -- a monitor number for learning rate scheduling
@@ -384,17 +383,19 @@ class GPT2(nn.Module):
             word_loss = F.cross_entropy(
                 logits.view(-1, self.vocab_size),
                 output_labels.view(-1),
-                ignore_index=self.pad_id,
+                ignore_index=self.pad_token_id,
                 reduction="mean"
             )
             ppl = torch.exp(word_loss)
 
-        # return statistics
-        ret_statistics = {}
-        ret_statistics["ppl"] = ppl.item()
-        ret_statistics["monitor"] = ppl.item()
+        # return dicts
+        ret_data = {}
+        ret_stat = {
+            "ppl": ppl.item(),
+            "monitor": ppl.item()
+        }
 
-        return ret_statistics
+        return ret_data, ret_stat
 
     def test_step(self, data):
         """One test step
@@ -406,8 +407,10 @@ class GPT2(nn.Module):
                 Y_floor {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
-            dict of outputs -- returned keys and values
+            dict of data -- returned keys and values
                 symbols {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
+            dict of statistics -- returned keys and values
+
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -423,6 +426,9 @@ class GPT2(nn.Module):
                 temp=self.temp
             )
 
-        return {
+        ret_data = {
             "symbols": symbols
         }
+        ret_stat = {}
+
+        return ret_data, ret_stat
