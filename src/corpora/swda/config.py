@@ -16,4 +16,4 @@ class Config(object):
 
         ## Pretrained embeddings (for initialization and evaluation)
         self.word_embedding_path = f"{self.task_data_dir}/glove_twitter_200.json"
-        self.eval_word_embedding_path = f"{self.task_data_dir}/google_news_300.json"
+        self.eval_word_embedding_path = f"{self.task_data_dir}/glove_twitter_200.json"
