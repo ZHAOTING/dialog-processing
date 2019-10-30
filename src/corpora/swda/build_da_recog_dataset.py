@@ -101,7 +101,8 @@ def train_dev_test_split_by_conv_no(sessions):
         elif conv_no in test_set_idx:
             dataset["test"].append(session)
         else:
-            raise Exception(f"conversation no {conv_no} not in any dataset split.")
+            continue
+            # raise Exception(f"conversation no {conv_no} not in any dataset split.")
     return dataset
 
 if __name__ == "__main__":
