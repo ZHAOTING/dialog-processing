@@ -10,6 +10,7 @@ import sklearn as sk
 
 from .sif_embedding import SIF_embedding, compute_pc, get_weighted_average
 
+
 class ClassificationMetrics:
     def __init__(self, classes):
         self.classes = classes
@@ -42,6 +43,7 @@ class ClassificationMetrics:
             "accuracy": accuracy,
         }
 
+
 class SentenceMetrics:
     def __init__(self, word_embedding_path, tokenizer):
         self.tokenizer = tokenizer
@@ -56,8 +58,11 @@ class SentenceMetrics:
         else:
             self.id2prob = None
 
-        with open(word_embedding_path) as f:
-            self.word2vec = json.load(f)
+        try:
+            with open(word_embedding_path) as f:
+                self.word2vec = json.load(f)
+        except FileNotFoundError:
+            raise Exception(f"Pretrained word embeddings are needed at {word_embedding_path} to calculate embedding-based metrics.")
 
         self.emb_mat = []
         emb_dim = len(list(self.word2vec.values())[0])
@@ -96,59 +101,144 @@ class SentenceMetrics:
 
     def _embedding_metric(self, hyps_emb, refs_emb, method='average'):
         if method == 'average':
-            hyps = [np.mean(hyp, axis=0) for hyp in hyps_emb]
-            refs = [np.mean(ref, axis=0) for ref in refs_emb]
-            return self._cosine_similarity(np.array(hyps), np.array(refs))
+            hyps_avg_emb = [np.mean(hyp, axis=0) for hyp in hyps_emb]
+            refs_avg_emb = [np.mean(ref, axis=0) for ref in refs_emb]
+            sims = self._cosine_similarity(np.array(hyps_avg_emb), np.array(refs_avg_emb))
+            return sims.tolist()
+        elif method == "multi_ref_average":
+            hyps_avg_emb = [np.mean(hyp, axis=0) for hyp in hyps_emb]
+            mrefs_avg_emb = [[np.mean(ref, axis=0) for ref in refs] for refs in refs_emb]
+            msims = []
+            for hyp_avg_emb, mref_avg_emb in zip(hyps_avg_emb, mrefs_avg_emb):
+                msim = self._cosine_similarity(np.array([hyp_avg_emb]*len(mref_avg_emb)), np.array(mref_avg_emb))
+                msims.append(msim.tolist())
+            return msims
         elif method == 'extrema':
-            hyps = []
-            refs = []
+            hyps_ext_emb = []
+            refs_ext_emb = []
             for hyp, ref in zip(hyps_emb, refs_emb):
                 h_max = np.max(hyp, axis=0)
                 h_min = np.min(hyp, axis=0)
                 h_plus = np.absolute(h_min) <= h_max
                 h = h_max * h_plus + h_min * np.logical_not(h_plus)
-                hyps.append(h)
+                hyps_ext_emb.append(h)
 
                 r_max = np.max(ref, axis=0)
                 r_min = np.min(ref, axis=0)
                 r_plus = np.absolute(r_min) <= r_max
                 r = r_max * r_plus + r_min * np.logical_not(r_plus)
-                refs.append(r)
+                refs_ext_emb.append(r)
+            sims = self._cosine_similarity(np.array(hyps_ext_emb), np.array(refs_ext_emb))
+            return sims.tolist()
+        elif method == "multi_ref_extrema":
+            hyps_ext_emb = []
+            mrefs_ext_emb = []
+            for hyp, mref in zip(hyps_emb, refs_emb):
+                h_max = np.max(hyp, axis=0)
+                h_min = np.min(hyp, axis=0)
+                h_plus = np.absolute(h_min) <= h_max
+                h = h_max * h_plus + h_min * np.logical_not(h_plus)
+                hyps_ext_emb.append(h)
 
-            return self._cosine_similarity(np.array(hyps), np.array(refs))
+                mref_ext_emb = []
+                for ref in mref:
+                    r_max = np.max(ref, axis=0)
+                    r_min = np.min(ref, axis=0)
+                    r_plus = np.absolute(r_min) <= r_max
+                    r = r_max * r_plus + r_min * np.logical_not(r_plus)
+                    mref_ext_emb.append(r)
+                mrefs_ext_emb.append(mref_ext_emb)
+            msims = []
+            for hyp_ext_emb, mref_ext_emb in zip(hyps_ext_emb, mrefs_ext_emb):
+                msim = self._cosine_similarity(np.array([hyp_ext_emb]*len(mref_ext_emb)), np.array(mref_ext_emb))
+                msims.append(msim.tolist())
+            return msims
         elif method == 'greedy':
-            sim_list = []
+            sims = []
             for hyp, ref in zip(hyps_emb, refs_emb):
                 hyp = np.array(hyp)
                 ref = np.array(ref).T
-                sim = (np.matmul(hyp, ref)
-                    / (np.sqrt(np.matmul(np.sum(hyp * hyp, axis=1, keepdims=True), np.sum(ref * ref, axis=0, keepdims=True)))+1e-10)
-                )
-                sim = np.max(sim, axis=0)
-                sim_list.append(np.mean(sim))
-
-            return np.array(sim_list)
+                sim = (np.matmul(hyp, ref) / (np.sqrt(np.matmul(np.sum(hyp * hyp, axis=1, keepdims=True), np.sum(ref * ref, axis=0, keepdims=True)))+1e-10))
+                sim = np.max(sim, axis=0).mean()
+                sims.append(sim)
+            return sims
+        elif method == "multi_ref_greedy":
+            msims = []
+            for hyp, mref in zip(hyps_emb, refs_emb):
+                hyp = np.array(hyp)
+                msim = []
+                for ref in mref:
+                    ref = np.array(ref).T
+                    sim = (np.matmul(hyp, ref) / (np.sqrt(np.matmul(np.sum(hyp * hyp, axis=1, keepdims=True), np.sum(ref * ref, axis=0, keepdims=True)))+1e-10))
+                    sim = np.max(sim, axis=0).mean()
+                    msim.append(sim)
+                msims.append(msim)
+            return msims
         else:
             raise NotImplementedError
 
     def batch_sim_bow(self, hyps, refs):
+        """Calculate Average/Extrema/Greedy embedding similarities in a batch
+
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+            refs {list of str} -- list of reference strings
+
+        Returns:
+            {list of float} Average similarities
+            {list of float} Extrema similarities
+            {list of float} Greedy similarities
+        """
+        assert len(hyps) == len(refs)
         hyps_tokens = [self._sent2tokens(hyp) for hyp in hyps]
         refs_tokens = [self._sent2tokens(ref) for ref in refs]
 
         hyps_emb = [self._tokens2emb(tokens) for tokens in hyps_tokens]
         refs_emb = [self._tokens2emb(tokens) for tokens in refs_tokens]
 
-        emb_avg_scores = self._embedding_metric(hyps_emb, refs_emb, "average").tolist()
-        emb_ext_scores = self._embedding_metric(hyps_emb, refs_emb, "extrema").tolist()
-        emb_greedy_scores = self._embedding_metric(hyps_emb, refs_emb, "greedy").tolist()
+        emb_avg_scores = self._embedding_metric(hyps_emb, refs_emb, "average")
+        emb_ext_scores = self._embedding_metric(hyps_emb, refs_emb, "extrema")
+        emb_greedy_scores = self._embedding_metric(hyps_emb, refs_emb, "greedy")
+
+        return emb_avg_scores, emb_ext_scores, emb_greedy_scores
+
+    def batch_multi_ref_sim_bow(self, hyps, mrefs):
+        """Calculate multi-referenced Average/Extrema/Greedy embedding similarities in a batch
+
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+            mrefs {list of list of str} -- list of multiple reference strings
+
+        Returns:
+            {list of float} Average similarities
+            {list of float} Extrema similarities
+            {list of float} Greedy similarities
+        """
+        assert len(hyps) == len(mrefs)
+        hyps_tokens = [self._sent2tokens(hyp) for hyp in hyps]
+        mrefs_tokens = [[self._sent2tokens(ref) for ref in mref] for mref in mrefs]
+
+        hyps_emb = [self._tokens2emb(tokens) for tokens in hyps_tokens]
+        mrefs_emb = [[self._tokens2emb(tokens) for tokens in mref_tokens] for mref_tokens in mrefs_tokens]
+
+        emb_avg_scores = self._embedding_metric(hyps_emb, mrefs_emb, "multi_ref_average")
+        emb_ext_scores = self._embedding_metric(hyps_emb, mrefs_emb, "multi_ref_extrema")
+        emb_greedy_scores = self._embedding_metric(hyps_emb, mrefs_emb, "multi_ref_greedy")
 
         return emb_avg_scores, emb_ext_scores, emb_greedy_scores
 
     def batch_bleu(self, hyps, refs, n=2):
+        """Calculate BLEU-n scores in a batch
+
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+            refs {list of str} -- list of reference strings
+            n {int} -- n for BLEU-n (default: 2)
+
+        Returns:
+            {list of float} list of BLEU scores
         """
-        :param refs - a list of reference sentence str
-        :param hyps - a list of hypothese sentence str
-        """
+        assert len(hyps) == len(refs)
         hyps_token = [self._sent2tokens(hyp) for hyp in hyps]
         refs_token = [self._sent2tokens(ref) for ref in refs]
 
@@ -159,10 +249,47 @@ class SentenceMetrics:
                 score = 0.0
             else:
                 try:
-                    score = sentence_bleu([ref_tokens], hyp_tokens, weights=weights, smoothing_function=SmoothingFunction().method1)
-                except:
-                    code.interact(local=locals())
-                    raise Exception("BLEU score error")
+                    score = sentence_bleu(
+                        [ref_tokens],
+                        hyp_tokens,
+                        weights=weights,
+                        smoothing_function=SmoothingFunction().method1
+                    )
+                except e:
+                    raise Exception(f"BLEU score error: {e}")
+            scores.append(score)
+        return scores
+
+    def batch_multi_ref_bleu(self, hyps, mrefs, n=2):
+        """Calculate multiple-referenced BLEU-n scores in a batch
+
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+            mrefs {list of list of str} -- list of multiple reference strings
+            n {int} -- n for BLEU-n (default: 2)
+
+        Returns:
+            {list of float} list of BLEU scores
+        """
+        assert len(hyps) == len(mrefs)
+        hyps_token = [self._sent2tokens(hyp) for hyp in hyps]
+        mrefs_tokens = [[self._sent2tokens(ref) for ref in mref] for mref in mrefs]
+
+        weights = [1./n]*n
+        scores = []
+        for hyp_tokens, mref_tokens in zip(hyps_token, mrefs_tokens):
+            if len(hyp_tokens) == 0:
+                score = 0.0
+            else:
+                try:
+                    score = sentence_bleu(
+                        mref_tokens,
+                        hyp_tokens,
+                        weights=weights,
+                        smoothing_function=SmoothingFunction().method1
+                    )
+                except e:
+                    raise Exception(f"BLEU score error: {e}")
             scores.append(score)
         return scores
 
@@ -176,7 +303,18 @@ class SentenceMetrics:
         High numbers and high ratios mean that there is much content in the generated responses,
         and high numbers further indicate that the generated responses are long
 
-        :param sents - a list of sentence strs
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+
+        Returns:
+            {float} intra distinct 1 ratio
+            {float} intra distinct 2 ratio
+            {float} inter distinct 1 ratio
+            {float} inter distinct 2 ratio
+            {int} intra distinct 1 types
+            {int} intra distinct 2 types
+            {int} inter distinct 1 types
+            {int} inter distinct 2 types
         """
         tokens_lst = [self._sent2tokens(sent) for sent in sents]
         seq_lens = [len(tokens) for tokens in tokens_lst]
@@ -187,18 +325,18 @@ class SentenceMetrics:
         intra_dist1, intra_dist2 = np.zeros(batch_size), np.zeros(batch_size)
         intra_unigram_types, intra_bigram_types = np.zeros(batch_size), np.zeros(batch_size)
 
-        n_unigrams, n_bigrams, n_unigrams_total , n_bigrams_total = 0. ,0., 0., 0.
+        n_unigrams, n_bigrams, n_unigrams_total, n_bigrams_total = 0., 0., 0., 0.
         unigrams_all, bigrams_all = Counter(), Counter()
         for b in range(batch_size):
-            unigrams= Counter([tuple(seqs[b,i:i+1]) for i in range(seq_lens[b])])
-            bigrams = Counter([tuple(seqs[b,i:i+2]) for i in range(seq_lens[b]-1)])
-            intra_dist1[b]=(len(unigrams.items())+1e-12)/(seq_lens[b]+1e-5)
-            intra_dist2[b]=(len(bigrams.items())+1e-12)/(max(0, seq_lens[b]-1)+1e-5)
+            unigrams = Counter([tuple(seqs[b, i:i+1]) for i in range(seq_lens[b])])
+            bigrams = Counter([tuple(seqs[b, i:i+2]) for i in range(seq_lens[b]-1)])
+            intra_dist1[b] = (len(unigrams.items())+1e-12)/(seq_lens[b]+1e-5)
+            intra_dist2[b] = (len(bigrams.items())+1e-12)/(max(0, seq_lens[b]-1)+1e-5)
             intra_unigram_types[b] = len(unigrams.items())
             intra_bigram_types[b] = len(bigrams.items())
 
-            unigrams_all.update([tuple(seqs[b,i:i+1]) for i in range(seq_lens[b])])
-            bigrams_all.update([tuple(seqs[b,i:i+2]) for i in range(seq_lens[b]-1)])
+            unigrams_all.update([tuple(seqs[b, i:i+1]) for i in range(seq_lens[b])])
+            bigrams_all.update([tuple(seqs[b, i:i+2]) for i in range(seq_lens[b]-1)])
             n_unigrams_total += seq_lens[b]
             n_bigrams_total += max(0, seq_lens[b]-1)
         intra_unigram_types = np.mean(intra_unigram_types)
@@ -213,42 +351,48 @@ class SentenceMetrics:
             intra_unigram_types, intra_bigram_types, \
             int(inter_unigram_types), int(inter_bigram_types)
 
-    def batch_coverage(self, preds, refs):
-        """
-        average word coverage rate of pairwise inputs
+    def batch_coverage(self, hyps, refs):
+        """Calculate average word coverage rate in a batch
 
-        :param preds - a list of predicted sentence strs
-        :param refs - a list of reference sentence strs
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+            refs {list of str} -- list of reference strings
+
+        Returns:
+            {float} average word coverage rate
         """
-        pred_tokens_lst = [self._sent2tokens(sent) for sent in preds]
+        hyp_tokens_lst = [self._sent2tokens(sent) for sent in hyps]
         ref_tokens_lst = [self._sent2tokens(sent) for sent in refs]
-        pred_words_sets = [set(tokens) for tokens in pred_tokens_lst]
+        hyp_words_sets = [set(tokens) for tokens in hyp_tokens_lst]
         ref_words_sets = [set(tokens) for tokens in ref_tokens_lst]
         coverage_rates = []
-        for pred_words_set, ref_words_set in zip(pred_words_sets, ref_words_sets):
+        for hyp_words_set, ref_words_set in zip(hyp_words_sets, ref_words_sets):
             if len(ref_words_set) == 0:
                 continue
-            coverage_set = ref_words_set.intersection(pred_words_set)
+            coverage_set = ref_words_set.intersection(hyp_words_set)
             coverage_rate = 1.0*len(coverage_set)/len(ref_words_set)
             coverage_rates.append(coverage_rate)
 
         return np.mean(coverage_rates)
 
-    def compute_pc_for_sif_embedding(self, preds):
-        """
-        pc for sif embedding from pred uttrs
+    def compute_pc_for_sif_embedding(self, hyps):
+        """Compute principle component for SIF embedding from hypotheses
 
-        :param preds - a list of predicted sentence strs
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+
+        Returns:
+            principle component
         """
-        pred_tokens_lst = [self._sent2tokens(sent) for sent in preds]
-        pred_ids = [self._tokens2ids(tokens) for tokens in pred_tokens_lst]
-        pred_word_probs = [self._ids2probs(ids) for ids in pred_ids]
+        hyp_tokens_lst = [self._sent2tokens(sent) for sent in hyps]
+        hyp_ids = [self._tokens2ids(tokens) for tokens in hyp_tokens_lst]
+        hyp_word_probs = [self._ids2probs(ids) for ids in hyp_ids]
 
         # compute principle component using references
-        pc_sent_lens = [len(sent) for sent in pred_ids]
+        pc_sent_lens = [len(sent) for sent in hyp_ids]
         max_pc_sent_len = max(pc_sent_lens)
-        padded_pc_sent_ids = [word_ids + [0]*(max_pc_sent_len-len(word_ids)) for word_ids in pred_ids]
-        padded_pc_sent_word_probs = [word_probs + [0.0]*(max_pc_sent_len-len(word_probs)) for word_probs in pred_word_probs]
+        padded_pc_sent_ids = [word_ids + [0]*(max_pc_sent_len-len(word_ids)) for word_ids in hyp_ids]
+        padded_pc_sent_word_probs = [word_probs + [0.0]*(max_pc_sent_len-len(word_probs)) for word_probs in hyp_word_probs]
         padded_pc_sent_ids = np.array(padded_pc_sent_ids)
         padded_pc_sent_word_probs = np.array(padded_pc_sent_word_probs)
         compute_pc_input = get_weighted_average(self.emb_mat, padded_pc_sent_ids, padded_pc_sent_word_probs)
@@ -256,23 +400,26 @@ class SentenceMetrics:
 
         return pc
 
-    def batch_sif_emb_sim(self, preds, refs, pc=None):
-        """
-        average sif embedding similarity of pairwise inputs
+    def batch_sif_emb_sim(self, hyps, refs, pc=None):
+        """Calculate SIF embedding similarities in a batch
 
-        :param preds - a list of predicted sentence strs
-        :param refs - a list of reference sentence strs
+        Arguments:
+            hyps {list of str} -- list of hypothesis strings
+            refs {list of str} -- list of reference strings
+
+        Returns:
+            {list of float} similarities
         """
-        pred_tokens_lst = [self._sent2tokens(sent) for sent in preds]
+        hyp_tokens_lst = [self._sent2tokens(sent) for sent in hyps]
         ref_tokens_lst = [self._sent2tokens(sent) for sent in refs]
 
-        pred_ids = [self._tokens2ids(tokens) for tokens in pred_tokens_lst]
+        hyp_ids = [self._tokens2ids(tokens) for tokens in hyp_tokens_lst]
         ref_ids = [self._tokens2ids(tokens) for tokens in ref_tokens_lst]
-        pred_word_probs = [self._ids2probs(ids) for ids in pred_ids]
+        hyp_word_probs = [self._ids2probs(ids) for ids in hyp_ids]
         ref_word_probs = [self._ids2probs(ids) for ids in ref_ids]
 
-        concat_ids = pred_ids+ref_ids
-        concat_word_probs = pred_word_probs+ref_word_probs
+        concat_ids = hyp_ids+ref_ids
+        concat_word_probs = hyp_word_probs+ref_word_probs
 
         # pad and make np array
         sent_lens = [len(sent) for sent in concat_ids]
@@ -284,19 +431,19 @@ class SentenceMetrics:
 
         # compute principle component using references
         if pc is None:
-            pc_sent_lens = [len(sent) for sent in pred_ids]
+            pc_sent_lens = [len(sent) for sent in hyp_ids]
             max_pc_sent_len = max(pc_sent_lens)
-            padded_pc_sent_ids = [word_ids + [0]*(max_pc_sent_len-len(word_ids)) for word_ids in pred_ids]
-            padded_pc_sent_word_probs = [word_probs + [0.0]*(max_pc_sent_len-len(word_probs)) for word_probs in pred_word_probs]
+            padded_pc_sent_ids = [word_ids + [0]*(max_pc_sent_len-len(word_ids)) for word_ids in hyp_ids]
+            padded_pc_sent_word_probs = [word_probs + [0.0]*(max_pc_sent_len-len(word_probs)) for word_probs in hyp_word_probs]
             padded_pc_sent_ids = np.array(padded_pc_sent_ids)
             padded_pc_sent_word_probs = np.array(padded_pc_sent_word_probs)
             compute_pc_input = get_weighted_average(self.emb_mat, padded_pc_sent_ids, padded_pc_sent_word_probs)
             pc = compute_pc(compute_pc_input)
 
         sif_embs = SIF_embedding(self.emb_mat, concat_ids, concat_word_probs, pc=pc)
-        n_sents = len(pred_ids)
-        pred_embs = sif_embs[:n_sents]
+        n_sents = len(hyp_ids)
+        hyp_embs = sif_embs[:n_sents]
         ref_embs = sif_embs[-n_sents:]
 
-        similarities = self._cosine_similarity(pred_embs, ref_embs)
+        similarities = self._cosine_similarity(hyp_embs, ref_embs)
         return similarities

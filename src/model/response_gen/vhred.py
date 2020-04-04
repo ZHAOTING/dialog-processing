@@ -6,7 +6,6 @@ import random
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.nn import functional as F
 
 from model.modules.encoders import EncoderRNN
@@ -17,11 +16,12 @@ from model.modules.utils import init_module_weights, init_word_embedding, gaussi
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class VHRED(nn.Module):
     def __init__(self, config, tokenizer):
         super(VHRED, self).__init__()
 
-        ## Attributes
+        # Attributes
         # Attributes from config
         self.word_embedding_dim = config.word_embedding_dim
         self.attr_embedding_dim = config.attr_embedding_dim
@@ -34,23 +34,21 @@ class VHRED(nn.Module):
         self.n_decoder_layers = config.n_decoder_layers
         self.use_attention = config.use_attention
         self.decode_max_len = config.decode_max_len
-        self.dropout_emb = config.dropout
-        self.dropout_input = config.dropout
-        self.dropout_hidden = config.dropout
-        self.dropout_output = config.dropout
         self.tie_weights = config.tie_weights
         self.rnn_type = config.rnn_type
         self.gen_type = config.gen_type
         self.top_k = config.top_k
         self.top_p = config.top_p
         self.temp = config.temp
-        self.optimizer_type = config.optimizer
-        self.init_lr = config.init_lr
-        self.gradient_clip = config.gradient_clip
-        self.l2_penalty = config.l2_penalty
-        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding
         self.word_embedding_path = config.word_embedding_path
         self.floor_encoder_type = config.floor_encoder
+        # Optional attributes from config
+        self.dropout_emb = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_input = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_hidden = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_output = config.dropout if hasattr(config, "dropout") else 0.0
+        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding if hasattr(config, "use_pretrained_word_embedding") else False
+        self.n_step_annealing = config.n_step_annealing if hasattr(config, "n_step_annealing") else 0
         # Other attributes
         self.vocab_size = len(tokenizer.word2id)
         self.word2id = tokenizer.word2id
@@ -58,9 +56,8 @@ class VHRED(nn.Module):
         self.pad_token_id = tokenizer.pad_token_id
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.kld_anneal_till_n_step = 10000
 
-        ## Input components
+        # Input components
         self.word_embedding = nn.Embedding(
             self.vocab_size,
             self.word_embedding_dim,
@@ -75,7 +72,7 @@ class VHRED(nn.Module):
             ),
         )
 
-        ## Encoding components
+        # Encoding components
         self.sent_encoder = EncoderRNN(
             input_dim=self.word_embedding_dim,
             hidden_dim=self.sent_encoder_hidden_dim,
@@ -100,7 +97,7 @@ class VHRED(nn.Module):
             rnn_type=self.rnn_type,
         )
 
-        ## Variational components
+        # Variational components
         self.prior_net = GaussianVariation(
             input_dim=self.dial_encoder_hidden_dim,
             z_dim=self.latent_variable_dim
@@ -118,11 +115,10 @@ class VHRED(nn.Module):
             self.dial_encoder_hidden_dim
         )
 
-        ## Decoding components
+        # Decoding components
         self.enc2dec_hidden_fc = nn.Linear(
             self.dial_encoder_hidden_dim,
-            self.n_decoder_layers*self.decoder_hidden_dim if self.rnn_type == "gru"
-                else self.n_decoder_layers*self.decoder_hidden_dim*2
+            self.n_decoder_layers*self.decoder_hidden_dim if self.rnn_type == "gru" else self.n_decoder_layers*self.decoder_hidden_dim*2
         )
         self.decoder = DecoderRNN(
             vocab_size=len(self.word2id),
@@ -145,7 +141,7 @@ class VHRED(nn.Module):
             attn_dim=self.sent_encoder_hidden_dim
         )
 
-        ## Extra components
+        # Extra components
         # Floor encoding
         if self.floor_encoder_type == "abs":
             self.floor_encoder = AbsFloorEmbEncoder(
@@ -160,67 +156,13 @@ class VHRED(nn.Module):
         else:
             self.floor_encoder = None
 
-        ## Initialization
-        self._set_optimizer()
-        self._print_model_stats()
+        # Initialization
         self._init_weights()
-
-    def _set_optimizer(self):
-        if self.optimizer_type == "adam":
-            self.optimizer = optim.AdamW(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-        elif self.optimizer_type == "sgd":
-            self.optimizer = optim.SGD(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-
-    def _print_model_stats(self):
-        total_parameters = 0
-        for name, param in self.named_parameters():
-            # shape is an array of tf.Dimension
-            shape = param.size()
-            variable_parameters = 1
-            for dim in shape:
-                variable_parameters *= dim
-            print("Trainable %s with %d parameters" % (name, variable_parameters))
-            total_parameters += variable_parameters
-        print("Total number of trainable parameters is %d" % total_parameters)
 
     def _init_weights(self):
         init_module_weights(self.enc2dec_hidden_fc)
         init_module_weights(self.latent_to_bow)
         init_module_weights(self.ctx_fc)
-
-    def _init_word_embedding(self):
-        if self.use_pretrained_word_embedding:
-            embeddings = []
-            pretrained_embeddings = json.load(open(self.word_embedding_path))
-            in_vocab_cnt = 0
-            for word_id in range(len(self.id2word)):
-                word = self.id2word[word_id]
-                if word in pretrained_embeddings:
-                    embeddings.append(pretrained_embeddings[word])
-                    in_vocab_cnt += 1
-                else:
-                    embeddings.append([0.0]*self.word_embedding_dim)
-            weights = nn.Parameter(torch.FloatTensor(embeddings).to(DEVICE))
-            print("{}/{} pretrained word embedding in vocab".\
-                format(in_vocab_cnt, self.vocab_size))
-        else:
-            weights = nn.Parameter(
-                torch.FloatTensor(
-                    self.vocab_size,
-                    self.word_embedding_dim
-                ).to(DEVICE)
-            )
-            torch.nn.init.uniform_(weights, -1.0, 1.0)
-        weights[self.pad_token_id].data.fill_(0)
-        return weights
 
     def _init_dec_hiddens(self, context):
         batch_size = context.size(0)
@@ -231,7 +173,7 @@ class VHRED(nn.Module):
                 batch_size,
                 self.n_decoder_layers,
                 self.decoder_hidden_dim
-            ).transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
+            ).transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
         elif self.rnn_type == "lstm":
             hiddens = hiddens.view(
                 batch_size,
@@ -239,8 +181,8 @@ class VHRED(nn.Module):
                 self.decoder_hidden_dim,
                 2
             )
-            h = hiddens[:,:,:,0].transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
-            c = hiddens[:,:,:,1].transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
+            h = hiddens[:, :, :, 0].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
+            c = hiddens[:, :, :, 1].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
             hiddens = (h, c)
 
         return hiddens
@@ -271,8 +213,8 @@ class VHRED(nn.Module):
             )
             sent_encodings = sent_encodings.view(batch_size, history_len, -1)
 
-        dialog_lens = (input_lens > 0).long().sum(1) # equals number of non-padding sents
-        _, _, dialog_encodings = self.dial_encoder(sent_encodings, dialog_lens) # [batch_size, dialog_encoder_dim]
+        dialog_lens = (input_lens > 0).long().sum(1)  # equals number of non-padding sents
+        _, _, dialog_encodings = self.dial_encoder(sent_encodings, dialog_lens)  # [batch_size, dialog_encoder_dim]
 
         return word_encodings, sent_encodings, dialog_encodings
 
@@ -314,11 +256,11 @@ class VHRED(nn.Module):
         return ret_dict
 
     def _get_attn_mask(self, attn_keys):
-        attn_mask = (attn_keys > 0)
+        attn_mask = (attn_keys != self.pad_token_id)
         return attn_mask
 
-    def _kld_coef_term(self, step):
-        return min(1.0, 1.0*step/self.kld_anneal_till_n_step)
+    def _annealing_coef_term(self, step):
+        return min(1.0, 1.0*step/self.n_step_annealing)
 
     def load_model(self, model_path):
         """Load pretrained model weights from model_path
@@ -326,11 +268,10 @@ class VHRED(nn.Module):
         Arguments:
             model_path {str} -- path to pretrained model weights
         """
-        if DEVICE == "cuda":
-            pretrained_state_dict = torch.load(model_path)
-        else:
-            pretrained_state_dict = torch.load(model_path, \
-                map_location=lambda storage, loc: storage)
+        pretrained_state_dict = torch.load(
+            model_path,
+            map_location=lambda storage, loc: storage
+        )
         self.load_state_dict(pretrained_state_dict)
 
     def train_step(self, data, step):
@@ -338,22 +279,22 @@ class VHRED(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
             step {int} -- the n-th optimization step
 
         Returns:
             dict of data -- returned keys and values
-                loss {FloatTensor []} -- loss to backword
+                'loss' {FloatTensor []} -- loss to backword
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                kld {float} -- KLD
-                kld_term {float} -- KLD annealing coefficient
-                bow_loss {float} -- bag-of-word loss
-                loss {float} -- batch loss
+                'ppl' {float} -- perplexity
+                'kld' {float} -- KLD
+                'kld_term' {float} -- KLD annealing coefficient
+                'bow_loss' {float} -- bag-of-word loss
+                'loss' {float} -- batch loss
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -363,7 +304,7 @@ class VHRED(nn.Module):
         batch_size = X.size(0)
         max_y_sent_len = Y_out.size(1)
 
-        ## Forward
+        # Forward
         # Get prior z
         word_encodings, sent_encodings, dial_encodings = self._encode_prior(
             inputs=X,
@@ -387,7 +328,7 @@ class VHRED(nn.Module):
             attn_mask=attn_mask
         )
 
-        ## Loss
+        # Loss
         loss = 0
         # Reconstruction
         word_loss = F.cross_entropy(
@@ -399,22 +340,18 @@ class VHRED(nn.Module):
         ppl = torch.exp(word_loss)
         loss += word_loss
         # KLD
-        kld_coef = self._kld_coef_term(step)
+        kld_coef = self._annealing_coef_term(step)
         kld_losses = gaussian_kld(post_mu, post_var, prior_mu, prior_var)
         avg_kld = kld_losses.mean()
         loss += avg_kld*kld_coef
         # BOW
-        pred_bow = self.latent_to_bow(post_z)
-        pred_bow = pred_bow.unsqueeze(1).repeat(1, max_y_sent_len, 1)
-        bow_loss = F.cross_entropy(
-            pred_bow.view(batch_size*max_y_sent_len, -1),
-            Y_out.view(-1),
-            ignore_index=self.pad_token_id,
-            reduction="mean"
-        )
+        Y_out_mask = (Y_out != self.pad_token_id).float()
+        bow_logits = self.latent_to_bow(post_z)  # [batch_size, vocab_size]
+        bow_loss = -F.log_softmax(bow_logits, dim=1).gather(1, Y_out) * Y_out_mask
+        bow_loss = bow_loss.sum(1).mean()
         loss += bow_loss
 
-        ## Return statistics
+        # Return statistics
         ret_statistics = {}
         ret_statistics["ppl"] = ppl.item()
         ret_statistics["kld_term"] = kld_coef
@@ -424,7 +361,7 @@ class VHRED(nn.Module):
 
         # return dicts
         ret_data = {
-            "loss": loss 
+            "loss": loss
         }
         ret_stat = {
             "ppl": ppl.item(),
@@ -441,19 +378,19 @@ class VHRED(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
 
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                kld {float} -- KLD
-                bow_loss {float} -- bag-of-word loss
-                monitor {float} -- a monitor number for learning rate scheduling
+                'ppl' {float} -- perplexity
+                'kld' {float} -- KLD
+                'bow_loss' {float} -- bag-of-word loss
+                'monitor' {float} -- a monitor number for learning rate scheduling
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -464,7 +401,7 @@ class VHRED(nn.Module):
         max_y_sent_len = Y_out.size(1)
 
         with torch.no_grad():
-            ## Forward
+            # Forward
             # Get prior z
             word_encodings, sent_encodings, dial_encodings = self._encode_prior(
                 inputs=X,
@@ -488,7 +425,7 @@ class VHRED(nn.Module):
                 attn_mask=attn_mask
             )
 
-            ## Loss
+            # Loss
             # Reconstruction
             word_loss = F.cross_entropy(
                 decoder_ret_dict["logits"].view(-1, self.vocab_size),
@@ -500,21 +437,11 @@ class VHRED(nn.Module):
             # KLD
             kld_losses = gaussian_kld(post_mu, post_var, prior_mu, prior_var)
             avg_kld = kld_losses.mean()
-            # BOW
-            pred_bow = self.latent_to_bow(post_z)
-            pred_bow = pred_bow.unsqueeze(1).repeat(1, max_y_sent_len, 1)
-            bow_loss = F.cross_entropy(
-                pred_bow.view(batch_size*max_y_sent_len, -1),
-                Y_out.view(-1),
-                ignore_index=self.pad_token_id,
-                reduction="mean"
-            )
 
         # return statistics
         ret_statistics = {}
         ret_statistics["ppl"] = ppl.item()
         ret_statistics["kld"] = avg_kld.item()
-        ret_statistics["bow_loss"] = bow_loss.item()
         ret_statistics["monitor"] = ppl.item()
 
         # return dicts
@@ -522,7 +449,6 @@ class VHRED(nn.Module):
         ret_stat = {
             "ppl": ppl.item(),
             "kld": avg_kld.item(),
-            "bow_loss": bow_loss.item(),
             "monitor": ppl.item()
         }
 
@@ -533,13 +459,13 @@ class VHRED(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
-                symbols {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
+                'symbols' {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
             dict of statistics -- returned keys and values
 
         """
@@ -548,7 +474,7 @@ class VHRED(nn.Module):
         batch_size = X.size(0)
 
         with torch.no_grad():
-            ## Forward
+            # Forward
             # Get prior z
             word_encodings, sent_encodings, dial_encodings = self._encode_prior(
                 inputs=X,
@@ -566,7 +492,6 @@ class VHRED(nn.Module):
                 attn_ctx=attn_ctx,
                 attn_mask=attn_mask
             )
-
 
         ret_data = {
             "symbols": decoder_ret_dict["symbols"]

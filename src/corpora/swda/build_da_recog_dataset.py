@@ -22,12 +22,14 @@ raw_data_dir = config.raw_data_dir
 zipfile_path = f"{config.raw_data_dir}/swda.zip"
 extracted_dir = f"{config.raw_data_dir}/swda"
 
+
 def clean_swda_text(text):
     text = re.sub(r"\{\w (.*?)\}", r"\1", text)
     text = re.sub(r"\{\w (.*?)\ --", r"\1", text)
     text = re.sub(r"\*\[\[.*?\]\]", "", text)
     text = standardize_english_text(text)
     return text
+
 
 def download_data():
     """Download and unpack dialogs"""
@@ -43,6 +45,7 @@ def download_data():
 
     os.rename(f"{config.raw_data_dir}/swda", extracted_dir)
 
+
 def build_session(filepath):
     trans = Transcript(filepath, f"{extracted_dir}/swda-metadata.csv")
     conversation_no = f"sw{trans.conversation_no}"
@@ -57,7 +60,7 @@ def build_session(filepath):
         da = uttr.damsl_act_tag()
         speaker = uttr.caller
 
-        if da == None or text.strip() == "":
+        if da is None or text.strip() == "":
             continue
         elif da == "x":
             continue
@@ -90,6 +93,7 @@ def build_session(filepath):
     }
     return session
 
+
 def train_dev_test_split_by_conv_no(sessions):
     dataset = {"train": [], "dev": [], "test": []}
     for session in sessions:
@@ -104,6 +108,7 @@ def train_dev_test_split_by_conv_no(sessions):
             continue
             # raise Exception(f"conversation no {conv_no} not in any dataset split.")
     return dataset
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -120,7 +125,7 @@ if __name__ == "__main__":
     print('SwDA data prepared!')
 
     print("Extracting sessions...")
-    ## Get file paths
+    # Get file paths
     filepaths = []
     for group_dir in os.listdir(extracted_dir):
         if re.match(r"sw\d*utt", group_dir):
@@ -144,12 +149,13 @@ if __name__ == "__main__":
         for uttr in sess["utterances"]:
             da = uttr["utterance_meta"]["dialog_act"]
             da_dict[da] += 1
-    sorted_da_list = sorted(da_dict.items(), key=lambda x:x[1], reverse=True)
+    sorted_da_list = sorted(da_dict.items(), key=lambda x: x[1], reverse=True)
     print(len(sorted_da_list))
     print([k for k, v in sorted_da_list])
 
     print("Processing sessions...")
     nlp = spacy.load('en_core_web_sm')
+
     def process_session(session):
         def tokenize(string):
             return [token.text for token in nlp(standardize_english_text(string))]

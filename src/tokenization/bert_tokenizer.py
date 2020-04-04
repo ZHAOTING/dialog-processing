@@ -2,13 +2,13 @@ import code
 import collections
 
 import torch
-from transformers import RobertaTokenizer
+from transformers import BertTokenizer
 
 
-class ModRobertaTokenizer(object):
-    def __init__(self, model_size, pad_token="<pad>", bos_token="<s>",
-                 eos_token="</s>", unk_token="<unk>", sep_token="</s>",
-                 cls_token="<s>", mask_token="<mask>", special_token_dict={}):
+class ModBertTokenizer(object):
+    def __init__(self, model_size, pad_token="[PAD]", bos_token="<s>",
+                 eos_token="</s>", unk_token="[UNK]", sep_token="[SEP]",
+                 cls_token="[CLS]", mask_token="[MASK]", special_token_dict={}):
         self.pad_token = pad_token
         self.bos_token = bos_token
         self.eos_token = eos_token
@@ -18,16 +18,17 @@ class ModRobertaTokenizer(object):
         self.mask_token = mask_token
 
         # load from pretrained tokenizer
-        assert model_size in ["base", "large", "large-mnli"]
-        self.pretrained = RobertaTokenizer.from_pretrained(f"roberta-{model_size}")
+        assert model_size in ["base", "large"]
+        self.pretrained = BertTokenizer.from_pretrained(f"bert-{model_size}-uncased")
 
         # add special tokens
         self._adapt_vocab(special_token_dict)
+        self.pretrained.add_tokens([bos_token, eos_token])  # different from other apis
 
         # vocab dict and revserse vocab dict
-        self.word2id = self.pretrained.encoder
+        self.word2id = self.pretrained.vocab
         self.word2id.update(self.pretrained.added_tokens_encoder)
-        self.id2word = self.pretrained.decoder
+        self.id2word = self.pretrained.ids_to_tokens
         self.id2word.update(self.pretrained.added_tokens_decoder)
 
         # set special token ids

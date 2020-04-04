@@ -11,14 +11,10 @@ import numpy as np
 import torch
 import torch.optim as optim
 
-from model.da_recog.hre import HRE
-from model.da_recog.hre_sep_uttr_enc import HRESepUttrEnc
-from model.da_recog.roberta import Roberta
+from model.lm.rnnlm import RNNLM
 from utils.helpers import StatisticsReporter
-from utils.metrics import ClassificationMetrics
 from tokenization.whitespace_tokenizer import WhiteSpaceTokenizer
-from tokenization.roberta_tokenizer import ModRobertaTokenizer
-from tasks.da_recog.data_source import DataSource
+from tasks.lm.data_source import DataSource
 
 
 def str2bool(v):
@@ -29,51 +25,60 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # model - architecture
-    parser.add_argument("--model", type=str, default="hre", help="[hre, hre_sep_uttr_enc, roberta]")
-    parser.add_argument("--model_size", type=str, default="large-mnli", help="model type for roberta, in [base, large, large-mnli]")
+    parser.add_argument("--model", type=str, default="rnnlm", help="[rnnlm]")
     parser.add_argument("--rnn_type", type=str, default="gru", help="[gru, lstm]")
-    parser.add_argument("--floor_encoder", type=str, default="none", help="floor encoder type in [none, rel, abs]")
-    parser.add_argument("--tokenizer", type=str, default="ws", help="[ws, roberta]")
+    parser.add_argument("--tie_weights", type=str2bool, default=True, help="tie weights for decoder")
+    parser.add_argument("--tokenizer", type=str, default="ws", help="[ws, gpt2]")
 
     # model - numbers
     parser.add_argument("--vocab_size", type=int, default=10000)
-    parser.add_argument("--history_len", type=int, default=5, help="number of history sentences")
     parser.add_argument("--word_embedding_dim", type=int, default=200)
-    parser.add_argument("--attr_embedding_dim", type=int, default=30)
-    parser.add_argument("--sent_encoder_hidden_dim", type=int, default=500)
-    parser.add_argument("--n_sent_encoder_layers", type=int, default=2)
-    parser.add_argument("--dial_encoder_hidden_dim", type=int, default=500)
-    parser.add_argument("--n_dial_encoder_layers", type=int, default=2)
+    parser.add_argument("--decoder_hidden_dim", type=int, default=500)
+    parser.add_argument("--n_decoder_layers", type=int, default=2)
 
     # training
     parser.add_argument("--seed", type=int, default=42, help="random initialization seed")
     parser.add_argument("--max_uttr_len", type=int, default=40, help="max utterance length for trauncation")
     parser.add_argument("--dropout", type=float, default=0.2, help="dropout probability")
+    parser.add_argument("--n_epochs", type=int, default=50, help="number of epochs for training")
+    parser.add_argument("--use_pretrained_word_embedding", type=str2bool, default=True)
+    parser.add_argument("--batch_size", type=int, default=50, help="batch size for training")
+    parser.add_argument("--eval_batch_size", type=int, default=100, help="batch size for evaluation")
+
+    # optimizer
     parser.add_argument("--l2_penalty", type=float, default=0.0, help="l2 penalty")
     parser.add_argument("--optimizer", type=str, default="adam", help="optimizer")
-    parser.add_argument("--init_lr", type=float, default=0.001, help="init learning rate")
+    parser.add_argument("--init_lr", type=float, default=1e-3, help="init learning rate")
     parser.add_argument("--min_lr", type=float, default=1e-7, help="minimum learning rate for early stopping")
     parser.add_argument("--lr_decay_rate", type=float, default=0.5)
     parser.add_argument("--gradient_clip", type=float, default=1.0, help="gradient clipping")
-    parser.add_argument("--n_epochs", type=int, default=20, help="number of epochs for training")
-    parser.add_argument("--use_pretrained_word_embedding", type=str2bool, default=True)
-    parser.add_argument("--batch_size", type=int, default=30, help="batch size for training")
-    parser.add_argument("--eval_batch_size", type=int, default=60, help="batch size for evaluation")
+
+    # inference
+    parser.add_argument("--decode_max_len", type=int, default=40, help="max utterance length for decoding")
+    parser.add_argument("--gen_type", type=str, default="greedy", help="[greedy, sample, top]")
+    parser.add_argument("--temp", type=float, default=1.0, help="temperature for decoding")
+    parser.add_argument("--top_k", type=int, default=0)
+    parser.add_argument("--top_p", type=float, default=0.0)
 
     # management
     parser.add_argument("--model_path", help="path to model")
-    parser.add_argument("--corpus", type=str, default="swda", help="[swda]")
+    parser.add_argument("--corpus", type=str, default="dd", help="[dd, cornellmovie, personachat]")
     parser.add_argument("--enable_log", type=str2bool, default=False)
     parser.add_argument("--save_model", type=str2bool, default=False)
     parser.add_argument("--check_loss_after_n_step", type=int, default=100)
     parser.add_argument("--validate_after_n_step", type=int, default=1000)
+    parser.add_argument("--sample_after_n_step", type=int, default=1000)
     parser.add_argument("--filename_note", type=str, help="take a note in saved files' names")
     config = parser.parse_args()
 
     # load corpus config
-    if config.corpus == "swda":
-        from corpora.swda.config import Config
-    corpus_config = Config(task="da_recog")
+    if config.corpus == "dd":
+        from corpora.dd.config import Config
+    elif config.corpus == "cornellmovie":
+        from corpora.cornellmovie.config import Config
+    elif config.corpus == "personachat":
+        from corpora.personachat.config import Config
+    corpus_config = Config(task="lm")
 
     # merge parse args with corpus config
     # priority: parse args > corpus config
@@ -85,9 +90,8 @@ if __name__ == "__main__":
 
     # define logger
     MODEL_NAME = config.model
-    LOG_FILE_NAME = "{}.floor_{}.seed_{}.{}".format(
+    LOG_FILE_NAME = "{}.seed_{}.{}".format(
         MODEL_NAME,
-        config.floor_encoder,
         config.seed,
         time.strftime("%Y%m%d-%H%M%S", time.localtime())
     )
@@ -111,18 +115,11 @@ if __name__ == "__main__":
 
     # tokenizers
     special_token_dict = {
-        "speaker1_token": "<speaker1>",
-        "speaker2_token": "<speaker2>"
     }
     if config.tokenizer == "ws":
         tokenizer = WhiteSpaceTokenizer(
             word_count_path=config.word_count_path,
             vocab_size=config.vocab_size,
-            special_token_dict=special_token_dict
-        )
-    elif config.tokenizer == "roberta":
-        tokenizer = ModRobertaTokenizer(
-            model_size=config.model_size,
             special_token_dict=special_token_dict
         )
 
@@ -145,25 +142,11 @@ if __name__ == "__main__":
         tokenizer=tokenizer
     )
     mlog(str(dev_data_source.statistics))
-    mlog("----- Loading test data -----")
-    test_data_source = DataSource(
-        data=dataset["test"],
-        config=config,
-        tokenizer=tokenizer
-    )
-    mlog(str(test_data_source.statistics))
     del dataset
 
-    # metrics calculator
-    metrics = ClassificationMetrics(config.dialog_acts)
-
     # build model
-    if config.model == "hre":
-        Model = HRE
-    elif config.model == "hre_sep_uttr_enc":
-        Model = HRESepUttrEnc
-    elif config.model == "roberta":
-        Model = Roberta
+    if config.model == "rnnlm":
+        Model = RNNLM
     model = Model(config, tokenizer)
 
     # model adaption
@@ -173,11 +156,9 @@ if __name__ == "__main__":
     if config.model_path:
         model.load_model(config.model_path)
         mlog("----- Model loaded -----")
-        mlog(f"model path: {config.model_path}")
+        mlog("model path: {}".format(config.model_path))
 
     # Build optimizer
-    if config.model == "roberta":
-        config.l2_penalty = 0.01  # follow the RoBERTa/BERT paper
     optimizer = optim.AdamW(
         model.parameters(),
         lr=config.init_lr,
@@ -213,14 +194,15 @@ if __name__ == "__main__":
             if batch_data is None:
                 break
 
-            # Forward
+            # forward
             model.train()
             ret_data, ret_stat = model.train_step(batch_data)
-            trn_reporter.update_data(ret_stat)
 
-            # Backward
+            # backward
             loss = ret_data["loss"]
             loss.backward()
+
+            # update
             if config.gradient_clip > 0.0:
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(),
@@ -228,25 +210,45 @@ if __name__ == "__main__":
                 )
             optimizer.step()
             optimizer.zero_grad()
-
-            # update
             trn_reporter.update_data(ret_stat)
 
-            # Check loss
+            # check loss
             if n_step > 0 and n_step % config.check_loss_after_n_step == 0:
                 log_s = f"{time.time()-start_time:.2f}s Epoch {epoch} batch {n_batch} - "
                 log_s += trn_reporter.to_string()
                 mlog(log_s)
                 trn_reporter.clear()
 
-            # Evaluate on dev dataset
+            # Sampling
+            if n_step > 0 and n_step % config.sample_after_n_step == 0:
+                model.eval()
+
+                log_s = "<Test> - Samples:"
+                mlog(log_s)
+                for sample_idx in range(5):
+                    ret_data, ret_stat = model.sample_step(batch_size=1)
+
+                    log_s = "hyp text:\n"
+                    hyp = ret_data["symbols"][0].tolist()
+                    hyp = tokenizer.convert_ids_to_tokens(
+                        ids=hyp,
+                        trim_bos=True,
+                        trim_from_eos=True,
+                        trim_pad=True,
+                    )
+                    log_s += "  {}\n".format(
+                        tokenizer.convert_tokens_to_string(hyp)
+                    )
+                    log_s += "="*30
+                    mlog(log_s)
+
+            # Evaluation on dev dataset
             if n_step > 0 and n_step % config.validate_after_n_step == 0:
                 model.eval()
 
                 log_s = f"<Dev> learning rate: {lr}\n"
                 mlog(log_s)
 
-                pred_labels, true_labels = [], []
                 dev_data_source.epoch_init(shuffle=False)
                 while True:
                     batch_data = dev_data_source.next(config.eval_batch_size)
@@ -255,21 +257,9 @@ if __name__ == "__main__":
 
                     ret_data, ret_stat = model.evaluate_step(batch_data)
                     dev_reporter.update_data(ret_stat)
-                    pred_labels += ret_data["labels"].tolist()
-                    true_labels += batch_data["Y_da"].tolist()
 
                 log_s = f"\n<Dev> - {time.time()-start_time:.3f}s - "
                 log_s += dev_reporter.to_string()
-                mlog(log_s)
-                log_s = "\tClassification report:\n"
-                log_s += metrics.classification_report(true_labels, pred_labels)
-                log_s += "\n"
-                metrics_results = metrics.classification_metrics(true_labels, pred_labels)
-                log_s += \
-                    f"\tF1 macro:       {100*metrics_results['f1_macro']:.2f}\n" \
-                    f"\tF1 micro:       {100*metrics_results['f1_micro']:.2f}\n" \
-                    f"\tF1 weighted:    {100*metrics_results['f1_weighted']:.2f}\n" \
-                    f"\tAccuracy:       {100*metrics_results['accuracy']:.2f}\n"
                 mlog(log_s)
 
                 # Save model if it has better monitor measurement
@@ -287,32 +277,6 @@ if __name__ == "__main__":
                 lr_scheduler.step(dev_reporter.get_value("monitor"))
                 dev_reporter.clear()
 
-            # Finished a step
-            n_batch += 1
+            # finished a step
             n_step += 1
-        
-        # Evaluate on test dataset every epoch
-        model.eval()
-        pred_labels, true_labels = [], []
-        test_data_source.epoch_init(shuffle=False)
-        while True:
-            batch_data = test_data_source.next(config.eval_batch_size)
-            if batch_data is None:
-                break
-
-            ret_data, ret_stat = model.evaluate_step(batch_data)
-            pred_labels += ret_data["labels"].tolist()
-            true_labels += batch_data["Y_da"].tolist()
-
-        log_s = f"\n<Test> - {time.time()-start_time:.3f}s -"
-        mlog(log_s)
-        log_s = "\tClassification report:\n"
-        log_s += metrics.classification_report(true_labels, pred_labels)
-        log_s += "\n"
-        metrics_results = metrics.classification_metrics(true_labels, pred_labels)
-        log_s += \
-            f"\tF1 macro:       {100*metrics_results['f1_macro']:.2f}\n" \
-            f"\tF1 micro:       {100*metrics_results['f1_micro']:.2f}\n" \
-            f"\tF1 weighted:    {100*metrics_results['f1_weighted']:.2f}\n" \
-            f"\tAccuracy:       {100*metrics_results['accuracy']:.2f}\n"
-        mlog(log_s)
+            n_batch += 1

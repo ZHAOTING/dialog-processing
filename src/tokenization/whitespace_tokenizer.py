@@ -3,33 +3,54 @@ import collections
 
 import torch
 
+
 class WhiteSpaceTokenizer(object):
-    def __init__(self, word_count_path, vocab_size):
+
+    def __init__(self, word_count_path, vocab_size,
+                 pad_token="<pad>", bos_token="<s>", eos_token="</s>",
+                 unk_token="<unk>", sep_token="<sep>", cls_token="<cls>",
+                 mask_token="<mask>", special_token_dict={}):
+        self.pad_token = pad_token
+        self.bos_token = bos_token
+        self.eos_token = eos_token
+        self.unk_token = unk_token
+        self.sep_token = sep_token
+        self.cls_token = cls_token
+        self.mask_token = mask_token
+
         # basic vocab dict
         self.word2id = {}
         # word prob dict
         self.word2prob = {}
 
         # fill in self.word2id and self.word2prob
-        self.init_vocab(word_count_path, vocab_size)
+        self.init_vocab(word_count_path, vocab_size, special_token_dict)
 
         # revserse vocab dict
         self.id2word = {}
         for k, v in self.word2id.items():
             self.id2word[v] = k
 
-        self.pad_token_id = self.word2id["<pad>"]
-        self.bos_token_id = self.word2id["<s>"]
-        self.eos_token_id = self.word2id["</s>"]
-        self.speaker1_token_id = self.word2id["<speaker1>"]
-        self.speaker2_token_id = self.word2id["<speaker2>"]
+        # set special token ids
+        for token_type in ["pad_token", "bos_token", "eos_token",
+                           "unk_token", "sep_token", "cls_token",
+                           "mask_token"]:
+            token = getattr(self, token_type)
+            setattr(self, f"{token_type}_id", self.word2id[token])
+        for token_type, token in special_token_dict.items():
+            setattr(self, f"{token_type}_id", self.word2id[token])
 
-    def init_vocab(self, word_count_path, vocab_size):
-        # basic vocab
-        self.word2id = collections.OrderedDict({
-            "<pad>": 0, "<s>": 1, "</s>": 2, "<unk>": 3, "<cls>": 4,
-            "<speaker1>": 5, "<speaker2>": 6,
-        })
+    def __len__(self):
+        return len(self.word2id)
+
+    def init_vocab(self, word_count_path, vocab_size, special_token_dict):
+        # special token vocab
+        for token in [self.pad_token, self.bos_token, self.eos_token,
+                      self.unk_token, self.sep_token, self.cls_token,
+                      self.mask_token]:
+            self.word2id[token] = len(self.word2id)
+        for token_type, token in special_token_dict.items():
+            self.word2id[token] = len(self.word2id)
 
         # vocab from file
         word_count = {}
@@ -38,7 +59,7 @@ class WhiteSpaceTokenizer(object):
             for line in lines:
                 if len(self.word2id) == vocab_size:
                     break
-                token, count = line.strip().split("\t")
+                token, count = line.split("\t")
                 if token not in self.word2id:
                     self.word2id[token] = len(self.word2id)
                 if token not in word_count:
@@ -63,16 +84,16 @@ class WhiteSpaceTokenizer(object):
         if len(tokens) == 0:
             return ids
         if bos_and_eos:
-            tokens = ["<s>"] + tokens + ["</s>"]
+            tokens = [self.bos_token] + tokens + [self.eos_token]
         elif add_eos:
-            tokens = tokens + ["</s>"]
+            tokens = tokens + [self.eos_token]
         if add_cls:
-            tokens = ["<cls>"] + tokens
+            tokens = [self.cls_token] + tokens
         for token in tokens:
             if token in self.word2id:
                 token_id = self.word2id[token]
             else:
-                token_id = self.word2id["<unk>"]
+                token_id = self.word2id[self.unk_token]
             ids.append(token_id)
         return ids
 

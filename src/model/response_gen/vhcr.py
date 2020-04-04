@@ -7,7 +7,6 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.nn import functional as F
 
 from model.modules.encoders import EncoderRNN
@@ -18,11 +17,12 @@ from model.modules.utils import init_module_weights, init_word_embedding, gaussi
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class VHCR(nn.Module):
     def __init__(self, config, tokenizer):
         super(VHCR, self).__init__()
 
-        ## Attributes
+        # Attributes
         # Attributes from config
         self.word_embedding_dim = config.word_embedding_dim
         self.attr_embedding_dim = config.attr_embedding_dim
@@ -35,23 +35,21 @@ class VHCR(nn.Module):
         self.n_decoder_layers = config.n_decoder_layers
         self.use_attention = config.use_attention
         self.decode_max_len = config.decode_max_len
-        self.dropout_emb = config.dropout
-        self.dropout_input = config.dropout
-        self.dropout_hidden = config.dropout
-        self.dropout_output = config.dropout
         self.tie_weights = config.tie_weights
         self.rnn_type = config.rnn_type
         self.gen_type = config.gen_type
         self.top_k = config.top_k
         self.top_p = config.top_p
         self.temp = config.temp
-        self.optimizer_type = config.optimizer
-        self.init_lr = config.init_lr
-        self.gradient_clip = config.gradient_clip
-        self.l2_penalty = config.l2_penalty
-        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding
         self.word_embedding_path = config.word_embedding_path
         self.floor_encoder_type = config.floor_encoder
+        # Optional attributes from config
+        self.dropout_emb = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_input = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_hidden = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_output = config.dropout if hasattr(config, "dropout") else 0.0
+        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding if hasattr(config, "use_pretrained_word_embedding") else False
+        self.n_step_annealing = config.n_step_annealing if hasattr(config, "n_step_annealing") else 0
         # Other attributes
         self.vocab_size = len(tokenizer.word2id)
         self.word2id = tokenizer.word2id
@@ -59,10 +57,9 @@ class VHCR(nn.Module):
         self.pad_token_id = tokenizer.pad_token_id
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.kld_anneal_till_n_step = 50000
         self.dropout_sent = 0.25
 
-        ## Input components
+        # Input components
         self.word_embedding = nn.Embedding(
             self.vocab_size,
             self.word_embedding_dim,
@@ -77,7 +74,7 @@ class VHCR(nn.Module):
             ),
         )
 
-        ## Encoding components
+        # Encoding components
         self.sent_encoder = EncoderRNN(
             input_dim=self.word_embedding_dim,
             hidden_dim=self.sent_encoder_hidden_dim,
@@ -113,33 +110,29 @@ class VHCR(nn.Module):
             rnn_type=self.rnn_type,
         )
 
-        ## Variational components
+        # Variational components
         self.dial_post_net = GaussianVariation(
             input_dim=self.dial_encoder_hidden_dim,
             z_dim=self.latent_variable_dim
         )
         self.sent_prior_net = GaussianVariation(
-            input_dim=self.dial_encoder_hidden_dim
-                +self.latent_variable_dim,
+            input_dim=self.dial_encoder_hidden_dim+self.latent_variable_dim,
             z_dim=self.latent_variable_dim
         )
         self.sent_post_net = GaussianVariation(
-            input_dim=self.sent_encoder_hidden_dim
-                +self.dial_encoder_hidden_dim
-                +self.latent_variable_dim,
+            input_dim=self.sent_encoder_hidden_dim+self.dial_encoder_hidden_dim+self.latent_variable_dim,
             z_dim=self.latent_variable_dim
         )
         self.unk_sent_vec = nn.Parameter(torch.randn(self.sent_encoder_hidden_dim)).to(DEVICE)
 
-        ## Decoding components
+        # Decoding components
         self.ctx_fc = nn.Linear(
             2*self.latent_variable_dim+self.dial_encoder_hidden_dim,
             self.dial_encoder_hidden_dim
         )
         self.enc2dec_hidden_fc = nn.Linear(
             self.dial_encoder_hidden_dim,
-            self.n_decoder_layers*self.decoder_hidden_dim if self.rnn_type == "gru"
-                else self.n_decoder_layers*self.decoder_hidden_dim*2
+            self.n_decoder_layers*self.decoder_hidden_dim if self.rnn_type == "gru" else self.n_decoder_layers*self.decoder_hidden_dim*2
         )
         self.decoder = DecoderRNN(
             vocab_size=len(self.word2id),
@@ -162,7 +155,7 @@ class VHCR(nn.Module):
             attn_dim=self.sent_encoder_hidden_dim
         )
 
-        ## Extra components
+        # Extra components
         # Floor encoding
         if self.floor_encoder_type == "abs":
             self.floor_encoder = AbsFloorEmbEncoder(
@@ -179,69 +172,15 @@ class VHCR(nn.Module):
         # Hidden initialization
         self.dial_z2dial_enc_hidden_fc = nn.Linear(
             self.latent_variable_dim,
-            self.n_dial_encoder_layers*self.dial_encoder_hidden_dim if self.rnn_type == "gru"
-                else self.n_dial_encoder_layers*self.dial_encoder_hidden_dim*2
+            self.n_dial_encoder_layers*self.dial_encoder_hidden_dim if self.rnn_type == "gru" else self.n_dial_encoder_layers*self.dial_encoder_hidden_dim*2
         )
 
-        self._set_optimizer()
-        self._print_model_stats()
+        # Initialization
         self._init_weights()
-
-    def _set_optimizer(self):
-        if self.optimizer_type == "adam":
-            self.optimizer = optim.AdamW(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-        elif self.optimizer_type == "sgd":
-            self.optimizer = optim.SGD(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-
-    def _print_model_stats(self):
-        total_parameters = 0
-        for name, param in self.named_parameters():
-            # shape is an array of tf.Dimension
-            shape = param.size()
-            variable_parameters = 1
-            for dim in shape:
-                variable_parameters *= dim
-            print("Trainable %s with %d parameters" % (name, variable_parameters))
-            total_parameters += variable_parameters
-        print("Total number of trainable parameters is %d" % total_parameters)
 
     def _init_weights(self):
         init_module_weights(self.enc2dec_hidden_fc)
         init_module_weights(self.ctx_fc)
-
-    def _init_word_embedding(self):
-        if self.use_pretrained_word_embedding:
-            embeddings = []
-            pretrained_embeddings = json.load(open(self.word_embedding_path))
-            in_vocab_cnt = 0
-            for word_id in range(len(self.id2word)):
-                word = self.id2word[word_id]
-                if word in pretrained_embeddings:
-                    embeddings.append(pretrained_embeddings[word])
-                    in_vocab_cnt += 1
-                else:
-                    embeddings.append([0.0]*self.word_embedding_dim)
-            weights = nn.Parameter(torch.FloatTensor(embeddings).to(DEVICE))
-            print("{}/{} pretrained word embedding in vocab".\
-                format(in_vocab_cnt, self.vocab_size))
-        else:
-            weights = nn.Parameter(
-                torch.FloatTensor(
-                    self.vocab_size,
-                    self.word_embedding_dim
-                ).to(DEVICE)
-            )
-            torch.nn.init.uniform_(weights, -1.0, 1.0)
-        weights[self.pad_token_id].data.fill_(0)
-        return weights
 
     def _init_dec_hiddens(self, context):
         batch_size = context.size(0)
@@ -252,7 +191,7 @@ class VHCR(nn.Module):
                 batch_size,
                 self.n_decoder_layers,
                 self.decoder_hidden_dim
-            ).transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
+            ).transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
         elif self.rnn_type == "lstm":
             hiddens = hiddens.view(
                 batch_size,
@@ -260,8 +199,8 @@ class VHCR(nn.Module):
                 self.decoder_hidden_dim,
                 2
             )
-            h = hiddens[:,:,:,0].transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
-            c = hiddens[:,:,:,1].transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
+            h = hiddens[:, :, :, 0].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
+            c = hiddens[:, :, :, 1].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
             hiddens = (h, c)
 
         return hiddens
@@ -303,14 +242,14 @@ class VHCR(nn.Module):
     def _get_dial_encodings(self, ctx_dial_lens, ctx_sent_encodings, z_dial):
         batch_size, history_len, _ = ctx_sent_encodings.size()
 
-        ## Init hidden states of dialog encoder from z_dial
+        # Init hidden states of dialog encoder from z_dial
         hiddens = self.dial_z2dial_enc_hidden_fc(z_dial)
         if self.rnn_type == "gru":
             hiddens = hiddens.view(
                 batch_size,
                 self.n_dial_encoder_layers,
                 self.dial_encoder_hidden_dim
-            ).transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
+            ).transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
         elif self.rnn_type == "lstm":
             hiddens = hiddens.view(
                 batch_size,
@@ -318,16 +257,16 @@ class VHCR(nn.Module):
                 self.dial_encoder_hidden_dim,
                 2
             )
-            h = hiddens[:,:,:,0].transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
-            c = hiddens[:,:,:,1].transpose(0, 1).contiguous() # (n_layers, batch_size, hidden_dim)
+            h = hiddens[:, :, :, 0].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
+            c = hiddens[:, :, :, 1].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
             hiddens = (h, c)
 
-        ## Inputs to dialog encoder
+        # Inputs to dialog encoder
         z_dial = z_dial.unsqueeze(1).repeat(1, history_len, 1)
         dial_encoder_inputs = torch.cat([ctx_sent_encodings, z_dial], dim=2)
 
         dialog_lens = ctx_dial_lens
-        _, _, dialog_encodings = self.dial_encoder(dial_encoder_inputs, dialog_lens, hiddens) # [batch_size, dialog_encoder_dim]
+        _, _, dialog_encodings = self.dial_encoder(dial_encoder_inputs, dialog_lens, hiddens)  # [batch_size, dialog_encoder_dim]
 
         return dialog_encodings
 
@@ -417,11 +356,11 @@ class VHCR(nn.Module):
         return ret_dict
 
     def _get_attn_mask(self, attn_keys):
-        attn_mask = (attn_keys > 0)
+        attn_mask = (attn_keys != self.pad_token_id)
         return attn_mask
 
-    def _kld_coef_term(self, step):
-        return min(1.0, 1.0*step/self.kld_anneal_till_n_step)
+    def _annealing_coef_term(self, step):
+        return min(1.0, 1.0*step/self.n_step_annealing)
 
     def load_model(self, model_path):
         """Load pretrained model weights from model_path
@@ -429,11 +368,10 @@ class VHCR(nn.Module):
         Arguments:
             model_path {str} -- path to pretrained model weights
         """
-        if DEVICE == "cuda":
-            pretrained_state_dict = torch.load(model_path)
-        else:
-            pretrained_state_dict = torch.load(model_path, \
-                map_location=lambda storage, loc: storage)
+        pretrained_state_dict = torch.load(
+            model_path,
+            map_location=lambda storage, loc: storage
+        )
         self.load_state_dict(pretrained_state_dict)
 
     def train_step(self, data, step):
@@ -441,22 +379,22 @@ class VHCR(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
             step {int} -- the n-th optimization step
 
         Returns:
             dict of data -- returned keys and values
-                loss {FloatTensor []} -- loss to backword
+                'loss' {FloatTensor []} -- loss to backword
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                sent_kld {float} -- sentence KLD
-                dial_kld {float} -- dialog KLD
-                kld_term {float} -- KLD annealing coefficient
-                loss {float} -- batch loss
+                'ppl' {float} -- perplexity
+                'sent_kld' {float} -- sentence KLD
+                'dial_kld' {float} -- dialog KLD
+                'kld_term' {float} -- KLD annealing coefficient
+                'loss' {float} -- batch loss
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -467,7 +405,7 @@ class VHCR(nn.Module):
         max_y_sent_len = Y_out.size(1)
         ctx_dial_lens = ((X != self.pad_token_id).sum(-1) > 0).sum(-1)
 
-        ## Forward
+        # Forward
         # Encode sentences
         word_encodings, ctx_sent_encodings = self._get_ctx_sent_encodings(
             inputs=X,
@@ -512,7 +450,7 @@ class VHCR(nn.Module):
             attn_mask=attn_mask
         )
 
-        ## Loss
+        # Loss
         loss = 0
         # Reconstruction
         word_loss = F.cross_entropy(
@@ -524,7 +462,7 @@ class VHCR(nn.Module):
         ppl = torch.exp(word_loss)
         loss += word_loss
         # KLD
-        kld_coef = self._kld_coef_term(step)
+        kld_coef = self._annealing_coef_term(step)
         dial_kld_losses = gaussian_kld(mu_dial_post, var_dial_post)
         avg_dial_kld = dial_kld_losses.mean()
         sent_kld_losses = gaussian_kld(mu_sent_post, var_sent_post, mu_sent_prior, var_sent_prior)
@@ -533,7 +471,7 @@ class VHCR(nn.Module):
 
         # return dicts
         ret_data = {
-            "loss": loss 
+            "loss": loss
         }
         ret_stat = {
             "ppl": ppl.item(),
@@ -550,19 +488,19 @@ class VHCR(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
 
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                sent_kld {float} -- sentence KLD
-                dial_kld {float} -- dialog KLD
-                monitor {float} -- a monitor number for learning rate scheduling
+                'ppl' {float} -- perplexity
+                'sent_kld' {float} -- sentence KLD
+                'dial_kld' {float} -- dialog KLD
+                'monitor' {float} -- a monitor number for learning rate scheduling
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -574,7 +512,7 @@ class VHCR(nn.Module):
         ctx_dial_lens = ((X != self.pad_token_id).sum(-1) > 0).sum(-1)
 
         with torch.no_grad():
-            ## Forward
+            # Forward
             # Encode sentences
             word_encodings, ctx_sent_encodings = self._get_ctx_sent_encodings(
                 inputs=X,
@@ -619,7 +557,7 @@ class VHCR(nn.Module):
                 attn_mask=attn_mask
             )
 
-            ## Loss
+            # Loss
             # Reconstruction
             word_loss = F.cross_entropy(
                 decoder_ret_dict["logits"].view(-1, self.vocab_size),
@@ -650,13 +588,13 @@ class VHCR(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
-                symbols {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
+                'symbols' {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
             dict of statistics -- returned keys and values
 
         """
@@ -666,7 +604,7 @@ class VHCR(nn.Module):
         ctx_dial_lens = ((X != self.pad_token_id).sum(-1) > 0).sum(-1)
 
         with torch.no_grad():
-            ## Forward
+            # Forward
             # Encode sentences
             word_encodings, ctx_sent_encodings = self._get_ctx_sent_encodings(
                 inputs=X,

@@ -6,12 +6,12 @@ import random
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.nn import functional as F
 
 from model.modules.utils import init_module_weights
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class GPT2(nn.Module):
     GEN_GREEDY = "greedy"
@@ -22,26 +22,28 @@ class GPT2(nn.Module):
     def __init__(self, config, tokenizer):
         super(GPT2, self).__init__()
 
-        ## Load pretrained gpt2 model
+        # Load pretrained gpt2 model
         from transformers import GPT2LMHeadModel
-        if config.model_size == "small":
-            pretrained = GPT2LMHeadModel.from_pretrained('gpt2')
-        elif config.model_size == "medium":
-            pretrained = GPT2LMHeadModel.from_pretrained('gpt2-medium')
+        model_size2model_name = {
+            "small": "gpt2",
+            "medium": "gpt2-medium",
+            "large": "gpt2-large",
+            "xl": "gpt2-xl",
+            "distil": "distilgpt2"
+        }
+        assert config.model_size in model_size2model_name
+        pretrained = GPT2LMHeadModel.from_pretrained(model_size2model_name[config.model_size])
         pretrained.resize_token_embeddings(len(tokenizer))
         self.transformer = pretrained.transformer
         self.lm_head = pretrained.lm_head
 
-        ## Attributes
+        # Attributes
         # Attributes from config
-        self.init_lr = config.init_lr
-        self.gradient_clip = config.gradient_clip
         self.decode_max_len = config.decode_max_len
         self.gen_type = config.gen_type
         self.top_k = config.top_k
         self.top_p = config.top_p
         self.temp = config.temp
-        self.l2_penalty = config.l2_penalty
         # Other attributes
         self.tokenizer = tokenizer
         self.vocab_size = len(tokenizer)
@@ -52,27 +54,15 @@ class GPT2(nn.Module):
         self.speaker1_token_id = tokenizer.speaker1_token_id
         self.speaker2_token_id = tokenizer.speaker2_token_id
 
-        ## Embedding componenets
+        # Embedding componenets
         self.word_embedding = self.transformer.wte
         self.position_embedding = self.transformer.wpe
 
-        ## Optimizer
-        self._set_optimizer()
-
-    def _set_optimizer(self):
-        self.optimizer = optim.AdamW(
-            self.parameters(),
-            lr=self.init_lr,
-            weight_decay=self.l2_penalty
-        )
-
-    def _construct_input_output(self, 
-        inputs, input_floors, outputs, output_floors, 
-        sample_mode=False):
+    def _construct_input_output(self, inputs, input_floors, outputs, output_floors, sample_mode=False):
         """Convert a list of sentences into a single sequence for each dialog
         """
 
-        ## Use lists instead of tensors to speed up
+        # Use lists instead of tensors to speed up
         input_lens = (inputs != self.pad_token_id).sum(-1)
         dial_lens = (input_lens > 0).sum(dim=1).tolist()
         inputs = inputs.tolist()
@@ -84,7 +74,7 @@ class GPT2(nn.Module):
             outputs = outputs.tolist()
             output_lens = output_lens.tolist()
        
-        ## build sequences
+        # build sequences
         input_token_id_seqs = []
         position_id_seqs = []
         output_token_id_seqs = []
@@ -127,7 +117,7 @@ class GPT2(nn.Module):
         seq_lens = [len(seq) for seq in input_token_id_seqs]
         max_seq_len = max(seq_lens)
 
-        ## pad sequences and produce tensors
+        # pad sequences and produce tensors
         input_token_id_seqs = [seq + [self.pad_token_id]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
         output_token_id_seqs = [seq + [self.pad_token_id]*(max_seq_len-len(seq)) for seq in output_token_id_seqs]
         position_id_seqs = [seq + [0]*(max_seq_len-len(seq)) for seq in position_id_seqs]
@@ -135,7 +125,7 @@ class GPT2(nn.Module):
         output_token_id_seqs = torch.LongTensor(output_token_id_seqs).to(DEVICE)
         position_id_seqs = torch.LongTensor(position_id_seqs).to(DEVICE)
 
-        ## compute embeddings
+        # compute embeddings
         word_embeddings = self.word_embedding(input_token_id_seqs)
         position_embeddings = self.position_embedding(position_id_seqs)
         embeddings = word_embeddings + position_embeddings
@@ -149,13 +139,13 @@ class GPT2(nn.Module):
         }
 
     def _new_step_input_embeddings(self, new_symbol, position_id):
-        ## word embeddings
+        # word embeddings
         new_word_emb = self.word_embedding(new_symbol)  # [batch_size, 1, emb_dim]
 
-        ## word position embeddings
+        # word position embeddings
         position_id = torch.LongTensor([position_id]).long().to(DEVICE).unsqueeze(1)  # [1, 1]
         new_pos_emb = self.position_embedding(position_id)  # [1, 1, emb_dim]
-        new_embeddings = new_word_emb + new_pos_emb # [batch_size, 1, emb_dim]
+        new_embeddings = new_word_emb + new_pos_emb  # [batch_size, 1, emb_dim]
 
         return new_embeddings
 
@@ -211,8 +201,8 @@ class GPT2(nn.Module):
         return logits, present
 
     def _sample(self,
-        inputs, input_floors, output_floors,
-        gen_type, top_p=0.0, top_k=0, temp=1.0):
+                inputs, input_floors, output_floors,
+                gen_type, top_p=0.0, top_k=0, temp=1.0):
         data_dict = self._construct_input_output(
             inputs=inputs, 
             input_floors=input_floors,
@@ -283,11 +273,10 @@ class GPT2(nn.Module):
         Arguments:
             model_path {str} -- path to pretrained model weights
         """
-        if DEVICE == "cuda":
-            pretrained_state_dict = torch.load(model_path)
-        else:
-            pretrained_state_dict = torch.load(model_path, \
-                map_location=lambda storage, loc: storage)
+        pretrained_state_dict = torch.load(
+            model_path,
+            map_location=lambda storage, loc: storage
+        )
         self.load_state_dict(pretrained_state_dict)
 
     def train_step(self, data):
@@ -295,17 +284,17 @@ class GPT2(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
-                loss {FloatTensor []} -- loss to backword
+                'loss' {FloatTensor []} -- loss to backword
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                loss {float} -- batch loss
+                'ppl' {float} -- perplexity
+                'loss' {float} -- batch loss
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -350,17 +339,17 @@ class GPT2(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
 
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                monitor {float} -- a monitor number for learning rate scheduling
+                'ppl' {float} -- perplexity
+                'monitor' {float} -- a monitor number for learning rate scheduling
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -402,13 +391,13 @@ class GPT2(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
-                symbols {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
+                'symbols' {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
             dict of statistics -- returned keys and values
 
         """

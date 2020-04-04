@@ -8,6 +8,7 @@ import ftfy
 import torch
 import numpy as np
 
+
 def load_partial_pretrained_word_embedding_as_dict(vocab, embedding_path, embedding_type):
     word_embedding = {}
     if embedding_type in ["glove"]:
@@ -26,7 +27,10 @@ def load_partial_pretrained_word_embedding_as_dict(vocab, embedding_path, embedd
         for word in vocab.keys():
             if word in word2vec.vocab:
                 word_embedding[word] = [float(v) for v in list(word2vec[word])]
+    else:
+        raise Exception(f"Unknown embedding type: {embedding_type}")
     return word_embedding
+
 
 def standardize_english_text(string):
     """
@@ -54,6 +58,7 @@ def standardize_english_text(string):
     string = string.lower()
     return string
 
+
 def repackage_hidden_states(hidden_states):
     if isinstance(hidden_states, torch.Tensor):
         hidden_states = hidden_states.detach()
@@ -61,16 +66,6 @@ def repackage_hidden_states(hidden_states):
         hidden_states = tuple(repackage_hidden_states(h) for h in hidden_states)
     return hidden_states
 
-def metric_is_improving(metric_history, history_len=2):
-    if len(metric_history) < history_len:
-        return True
-
-    improving = False
-    recent_history = metric_history[-history_len:]
-    for idx in range(1,len(recent_history)):
-        if recent_history[idx] < recent_history[idx-1]:
-            improving = True
-    return improving
 
 class StatisticsReporter:
     def __init__(self):
@@ -78,7 +73,7 @@ class StatisticsReporter:
 
     def update_data(self, d):
         for k, v in d.items():
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float, np.int, np.int32, np.int64, np.float, np.float32, np.float64)):
                 self.statistics[k] += [v]
 
     def clear(self):
@@ -86,7 +81,7 @@ class StatisticsReporter:
 
     def to_string(self):
         string_list = []
-        for k, v in self.statistics.items():
+        for k, v in sorted(list(self.statistics.items()), key=lambda x: x[0]):
             mean = np.mean(v)
             string_list.append("{}: {:.5g}".format(k, mean))
         return ", ".join(string_list)
@@ -97,3 +92,7 @@ class StatisticsReporter:
             return value
         else:
             return None
+
+    def items(self):
+        for k, v in self.statistics.items():
+            yield k, v

@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import stats
 
+
 class SignificanceTestMetrics:
     def __init__(self):
         pass
@@ -27,6 +28,7 @@ class SignificanceTestMetrics:
         statistic = float(np.abs(table[0][1]-table[1][0]))**2/(table[1][0]+table[0][1])
         pval = 1-stats.chi2.cdf(statistic, 1)
         return pval
+
 
 class OutlierDetector:
     def __init__(self):
@@ -74,6 +76,7 @@ class OutlierDetector:
             if data_point > upper_limit or data_point < lower_limit:
                 outliers.append(data_point)
         return outliers
+
 
 class InterAnnotatorAgreementMetrics:
     def __init__(self):

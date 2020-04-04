@@ -11,20 +11,25 @@ This repository provides a general architecture for NLU and NLG in dialog modeli
 
 ## Example commands to run a task
 
-(at directory dialog_modeling/src/)
+(at directory dialog_processing/src/)
 
 ~~~~
-# download raw data and preprocess
-python -m corpora.{corpus_name}.build_{task_name}_dataset.py
+# 1. download raw data and preprocess
+python -m corpora.{corpus_name}.build_{task_name}_dataset
 
-# (optional) extract pretrained word embeddings
-python -m corpora.{corpus_name}.get_pretrained_embedding.py -t {task_name} -e {pretrained_embedding_type} -p {path_to_pretrained_embedding} -o {path_to_output_json_file}
+# 2. extract pretrained word embeddings (optional if you are not gonna use pretrained embeddings) 
+# 2.1 download pretrained word embeddings to be used (e.g. Glove, word2vec, ...)
+# 2.2 extract needed word embeddings from raw file
+python -m corpora.{corpus_name}.get_pretrained_embedding -t {task_name} -e {pretrained_embedding_type} -p {path_to_pretrained_embedding} -o {path_to_output_json_file}
 
-# train a model
-python -m tasks.{task_name}.train.py --model {model_name} --corpus {corpus_name} --tokenizer {tokenizer_name} [--arg value]*
+# 3. train a model
+python -m tasks.{task_name}.train --model {model_name} --corpus {corpus_name} --tokenizer {tokenizer_name} --enable_log True --save_model True [--{arg} {value}]*
+
+# 4. evaluate a trained model
+python -m tasks.{task_name}.eval --model {model_name} --corpus {corpus_name} --tokenizer {tokenizer_name} --model_path {path_to_the_trained_model} [--{arg} {value}]*
 ~~~~
 
-The above scripts also accept other arguments (see the code for details).
+The scripts also accept other arguments (see the code for details).
 
 ## Components
 
@@ -82,15 +87,15 @@ A by-product of this process is a word count file, which is a vocabulary built f
 A tokenizer bridges 1) the gap between human language (sentence) and model inputs (word ids) and 2) the gap between model outputs (word ids) and human language (sentence). Therefore, it should provide following basic functions.
 
 * convert a sentence string into a list of tokens
-`convert_sent_to_tokens()`
+`convert_string_to_tokens()`
 * convert a list tokens into a list of word ids
 `convert_tokens_to_ids()`
 * convert a list word ids into a list tokens
 `convert_ids_to_tokens()`
 * convert a list of tokens into a sentence string
-`convert_tokens_to_sent()`
+`convert_tokens_to_string()`
 
-To ensure the consistency in these processes and reverse processes, a tokenizer internally maintains a `word2id` dictionary and a `id2word` dictionary. These dictionaries should also correspond to the word embedding lookup-table of a model, so `tokenizer` is also taken as a parameter when initializing a model.
+To ensure the consistency in these processes and reverse processes, a tokenizer internally maintains a `word2id` dictionary and an `id2word` dictionary. These dictionaries should also correspond to the word embedding lookup-table of a model, so `tokenizer` is also taken as a parameter when initializing a model.
 
 ### Data source
 
@@ -102,7 +107,7 @@ Usually we train/evaluate models using mini batches. A data source reads in data
 
 (related code: `model/{task_name}/{model_name}.py`)
 
-A model should provide three main APIs, i.e. `train_step()`, `evaluate_step()`, and `test_step()`. The APIs perform a training/dev/test step on a mini batch respectively.
+A model usually should provide three main APIs, i.e. `train_step()`, `evaluate_step()`, and `test_step()`. The APIs perform a training/dev/test step on a mini batch respectively.
 
 ![components2](./repo_diagram2.png)
 
@@ -137,31 +142,41 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
 ### Corpora
 
 - DailyDialog (`dd`)
+- PersonaChat (`personachat`)
 - CornellMovie (`cornellmovie`)
 - Switchboard Dialog Act (SwDA, `swda`)
 
 ### Tasks
 
 - dialog response generation (`response_gen`)
+- dialog response evaluation (`response_eval`) (to be released)
 - dialog act recognition (`da_recog`)
+- language modeling (`lm`)
 
 ### Models
 
 - dialog response generation
   - seq2seq (`S2S`)
   - HRED (`HRED`, Serban 2016, [arxiv](https://arxiv.org/abs/1507.04808))
-    - with relative speaker utterance encoders (`HREDSepUttrEnc`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
+  - HRED with relative speaker utterance encoders (`HREDSepUttrEnc`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
   - VHRED (`VHRED`, Serban 2017, [arxiv](https://arxiv.org/abs/1605.06069))
   - VHCR (`VHCR`, Park 2018, [arxiv](https://arxiv.org/abs/1804.03424))
   - GPT2 for response generation (`GPT2`, Wolf 2019, [arxiv](https://arxiv.org/abs/1901.08149))
+- dialog response evaluation
+  - ADEM (`ADEM`, Lowe 2017, [arxiv](https://arxiv.org/abs/1708.07149))
+  - RUBER (`RUBER`, Tao 2018, [arxiv](https://arxiv.org/abs/1701.03079))
+  - Roberta-eval (`Roberta`, Zhao 2020, [arxiv](#))
 - dialog act recognition
   - HRE (`HRE`)
-    - with relative speaker utterance encoders (`HRESepUttrEnc`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
+  - HRE with relative speaker utterance encoders (`HRESepUttrEnc`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
   - Roberta (`Roberta`, Liu 2019, [arxiv](https://arxiv.org/abs/1907.11692))
+- language modeling
+  - RNNLM (`RNNLM`)
 
 ### Tokenizers
 
 - Whitespace-based tokenizer (`BasicTokenizer`)
+- BERT tokenizer (`ModBertTokenizer`)
 - GPT2 tokenizer (`ModGPT2Tokenizer`)
 - Roberta tokenizer (`ModRobertaTokenizer`)
 
@@ -169,11 +184,15 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
 (in `utils/metrics.py`)
 
 Sentence comparison (a hypothesis against a reference):
-  - BLEU
+  - BLEU-n
+  - multi-ref BLEU-n
   - embedding-based similarity
     - extrema vector
     - greedy matching
     - average vector
+    - multi-ref extrema vector
+    - multi-ref greedy matching
+    - multi-ref average vector
     - SIF embedding (Arora 2017, [arxiv](https://openreview.net/forum?id=SyK00v5xx); used in Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
   - Distinct-\[1,2\]
 

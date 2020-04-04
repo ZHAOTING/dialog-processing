@@ -6,7 +6,6 @@ import random
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.nn import functional as F
 
 from model.modules.encoders import EncoderRNN
@@ -21,7 +20,7 @@ class S2S(nn.Module):
     def __init__(self, config, tokenizer):
         super(S2S, self).__init__()
 
-        ## Attributes
+        # Attributes
         # Attributes from config
         self.word_embedding_dim = config.word_embedding_dim
         self.attr_embedding_dim = config.attr_embedding_dim
@@ -31,23 +30,20 @@ class S2S(nn.Module):
         self.n_decoder_layers = config.n_decoder_layers
         self.use_attention = config.use_attention
         self.decode_max_len = config.decode_max_len
-        self.dropout_emb = config.dropout
-        self.dropout_input = config.dropout
-        self.dropout_hidden = config.dropout
-        self.dropout_output = config.dropout
         self.tie_weights = config.tie_weights
         self.rnn_type = config.rnn_type
         self.gen_type = config.gen_type
         self.top_k = config.top_k
         self.top_p = config.top_p
         self.temp = config.temp
-        self.optimizer_type = config.optimizer
-        self.init_lr = config.init_lr
-        self.gradient_clip = config.gradient_clip
-        self.l2_penalty = config.l2_penalty
-        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding
         self.word_embedding_path = config.word_embedding_path
         self.floor_encoder_type = config.floor_encoder
+        # Optional attributes from config
+        self.dropout_emb = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_input = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_hidden = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_output = config.dropout if hasattr(config, "dropout") else 0.0
+        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding if hasattr(config, "use_pretrained_word_embedding") else False
         # Other attributes
         self.word2id = tokenizer.word2id
         self.id2word = tokenizer.id2word
@@ -56,7 +52,7 @@ class S2S(nn.Module):
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
 
-        ## Input components
+        # Input components
         self.word_embedding = nn.Embedding(
             self.vocab_size,
             self.word_embedding_dim,
@@ -71,7 +67,7 @@ class S2S(nn.Module):
             ),
         )
 
-        ## Encoding components
+        # Encoding components
         self.sent_encoder = EncoderRNN(
             input_dim=self.word_embedding_dim,
             hidden_dim=self.sent_encoder_hidden_dim,
@@ -85,7 +81,7 @@ class S2S(nn.Module):
             rnn_type=self.rnn_type,
         )
 
-        ## Decoding components
+        # Decoding components
         self.enc2dec_hidden_fc = nn.Linear(
             self.sent_encoder_hidden_dim,
             self.n_decoder_layers*self.decoder_hidden_dim if self.rnn_type == "gru"
@@ -112,7 +108,7 @@ class S2S(nn.Module):
             attn_dim=self.sent_encoder_hidden_dim
         )
 
-        ## Extra components
+        # Extra components
         # floor encoding
         if self.floor_encoder_type == "abs":
             self.floor_encoder = AbsFloorEmbEncoder(
@@ -127,65 +123,11 @@ class S2S(nn.Module):
         else:
             self.floor_encoder = None
 
-        ## Initialization
-        self._set_optimizer()
+        # Initialization
         self._init_weights()
-        self._print_model_stats()
-
-    def _set_optimizer(self):
-        if self.optimizer_type == "adam":
-            self.optimizer = optim.AdamW(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-        elif self.optimizer_type == "sgd":
-            self.optimizer = optim.SGD(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-
-    def _print_model_stats(self):
-        total_parameters = 0
-        for name, param in self.named_parameters():
-            # shape is an array of tf.Dimension
-            shape = param.size()
-            variable_parameters = 1
-            for dim in shape:
-                variable_parameters *= dim
-            print("Trainable %s with %d parameters" % (name, variable_parameters))
-            total_parameters += variable_parameters
-        print("Total number of trainable parameters is %d" % total_parameters)
 
     def _init_weights(self):
         init_module_weights(self.enc2dec_hidden_fc)
-
-    def _init_word_embedding(self):
-        if self.use_pretrained_word_embedding:
-            embeddings = []
-            pretrained_embeddings = json.load(open(self.word_embedding_path))
-            in_vocab_cnt = 0
-            for word_id in range(len(self.id2word)):
-                word = self.id2word[word_id]
-                if word in pretrained_embeddings:
-                    embeddings.append(pretrained_embeddings[word])
-                    in_vocab_cnt += 1
-                else:
-                    embeddings.append([0.0]*self.word_embedding_dim)
-            weights = nn.Parameter(torch.FloatTensor(embeddings).to(DEVICE))
-            print("{}/{} pretrained word embedding in vocab".
-                  format(in_vocab_cnt, self.vocab_size))
-        else:
-            weights = nn.Parameter(
-                torch.FloatTensor(
-                    self.vocab_size,
-                    self.word_embedding_dim
-                ).to(DEVICE)
-            )
-            torch.nn.init.uniform_(weights, -1.0, 1.0)
-        weights[self.pad_token_id].data.fill_(0)
-        return weights
 
     def _init_dec_hiddens(self, context):
         batch_size = context.size(0)
@@ -270,7 +212,7 @@ class S2S(nn.Module):
         return ret_dict
 
     def _get_attn_mask(self, attn_keys):
-        attn_mask = (attn_keys > 0)
+        attn_mask = (attn_keys != self.pad_token_id)
         return attn_mask
 
     def load_model(self, model_path):
@@ -279,11 +221,10 @@ class S2S(nn.Module):
         Arguments:
             model_path {str} -- path to pretrained model weights
         """
-        if DEVICE == "cuda":
-            pretrained_state_dict = torch.load(model_path)
-        else:
-            pretrained_state_dict = torch.load(model_path,
-                                               map_location=lambda storage, loc: storage)
+        pretrained_state_dict = torch.load(
+            model_path,
+            map_location=lambda storage, loc: storage
+        )
         self.load_state_dict(pretrained_state_dict)
 
     def train_step(self, data):
@@ -291,17 +232,17 @@ class S2S(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
-                loss {FloatTensor []} -- loss to backword
+                'loss' {FloatTensor []} -- loss to backword
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                loss {float} -- batch loss
+                'ppl' {float} -- perplexity
+                'loss' {float} -- batch loss
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -310,7 +251,7 @@ class S2S(nn.Module):
 
         batch_size = X.size(0)
 
-        ## Forward
+        # Forward
         word_encodings, sent_encodings = self._encode(
             inputs=X,
             input_floors=X_floor,
@@ -325,7 +266,7 @@ class S2S(nn.Module):
             attn_mask=attn_mask
         )
 
-        ## Calculate loss
+        # Calculate loss
         loss = 0
         word_loss = F.cross_entropy(
             decoder_ret_dict["logits"].view(-1, self.vocab_size),
@@ -352,17 +293,17 @@ class S2S(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
 
             dict of statistics -- returned keys and values
-                ppl {float} -- perplexity
-                monitor {float} -- a monitor number for learning rate scheduling
+                'ppl' {float} -- perplexity
+                'monitor' {float} -- a monitor number for learning rate scheduling
         """
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
@@ -372,7 +313,7 @@ class S2S(nn.Module):
         batch_size = X.size(0)
 
         with torch.no_grad():
-            ## Forward
+            # Forward
             word_encodings, sent_encodings = self._encode(
                 inputs=X,
                 input_floors=X_floor,
@@ -387,7 +328,7 @@ class S2S(nn.Module):
                 attn_mask=attn_mask
             )
 
-            ## Loss
+            # Loss
             word_loss = F.cross_entropy(
                 decoder_ret_dict["logits"].view(-1, self.vocab_size),
                 Y_out.view(-1),
@@ -410,13 +351,13 @@ class S2S(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
-                X_floor {LongTensor [batch_size, history_len]} -- floors of context sentences
-                Y_floor {LongTensor [batch_size]} -- floor of response sentence
+                'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
+                'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
             dict of data -- returned keys and values
-                symbols {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
+                'symbols' {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
             dict of statistics -- returned keys and values
 
         """
@@ -425,7 +366,7 @@ class S2S(nn.Module):
         batch_size = X.size(0)
 
         with torch.no_grad():
-            ## Forward
+            # Forward
             word_encodings, sent_encodings = self._encode(
                 inputs=X,
                 input_floors=X_floor,

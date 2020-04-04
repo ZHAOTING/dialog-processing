@@ -13,12 +13,13 @@ def get_weighted_average(We, x, w):
     n_samples = x.shape[0]
     emb = np.zeros((n_samples, We.shape[1]))
     for i in range(n_samples):
-        n_valid_words = np.count_nonzero(w[i,:])
+        n_valid_words = np.count_nonzero(w[i, :])
         if n_valid_words > 0:
-            emb[i,:] = w[i,:].dot(We[x[i,:],:]) / n_valid_words
+            emb[i, :] = w[i, :].dot(We[x[i, :], :]) / n_valid_words
     return emb
 
-def compute_pc(X,npc=1):
+
+def compute_pc(X, npc=1):
     """
     Compute the principal components. DO NOT MAKE THE DATA ZERO MEAN!
     :param X: X[i,:] is a data point
@@ -29,6 +30,7 @@ def compute_pc(X,npc=1):
     svd.fit(X)
     return svd.components_
 
+
 def remove_pc(X, npc=1, pc=None):
     """
     Remove the projection on the principal components
@@ -38,7 +40,7 @@ def remove_pc(X, npc=1, pc=None):
     """
     if pc is None:
         pc = compute_pc(X, npc)
-    if npc==1:
+    if npc == 1:
         XX = X - X.dot(pc.transpose()) * pc
     else:
         XX = X - X.dot(pc.transpose()).dot(pc)

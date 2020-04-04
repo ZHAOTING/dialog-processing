@@ -1,9 +1,9 @@
 numpy
-torch
+torch==1.4.0
 tqdm
 spacy
 gensim
-transformers
+transformers==2.3.0
 ftfy
 nltk
 sklearn

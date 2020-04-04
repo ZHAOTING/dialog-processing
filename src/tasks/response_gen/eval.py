@@ -17,14 +17,15 @@ from model.response_gen.hred_sep_uttr_enc import HREDSepUttrEnc
 from model.response_gen.vhred import VHRED
 from model.response_gen.vhcr import VHCR
 from model.response_gen.gpt2 import GPT2
-from utils.helpers import metric_is_improving, StatisticsReporter
 from utils.metrics import SentenceMetrics
 from tokenization.whitespace_tokenizer import WhiteSpaceTokenizer
 from tokenization.gpt2_tokenizer import ModGPT2Tokenizer
 from tasks.response_gen.data_source import DataSource
 
+
 def str2bool(v):
     return v.lower() in ('true', '1', "True")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -32,7 +33,7 @@ if __name__ == "__main__":
     # model - architecture
     parser.add_argument("--model", type=str, default="hred", help="[s2s, hred, hred_sep_uttr_enc, vhred, vhcr, gpt2]")
     parser.add_argument("--model_size", type=str, default=None, help="[small, medium], model size for GPT2")
-    parser.add_argument("--rnn_type", type=str, default="lstm", help="[gru, lstm]")
+    parser.add_argument("--rnn_type", type=str, default="gru", help="[gru, lstm]")
     parser.add_argument("--floor_encoder", type=str, default="none", help="floor encoder type in [none, rel, abs]")
     parser.add_argument("--use_attention", type=str2bool, default=False, help="use attention for decoder")
     parser.add_argument("--tie_weights", type=str2bool, default=True, help="tie weights for decoder")
@@ -47,40 +48,30 @@ if __name__ == "__main__":
     parser.add_argument("--n_sent_encoder_layers", type=int, default=2)
     parser.add_argument("--dial_encoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_dial_encoder_layers", type=int, default=2)
-    parser.add_argument("--latent_dim", type=int, default=500)
     parser.add_argument("--decoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_decoder_layers", type=int, default=2)
-
-    # training
-    parser.add_argument("--seed", type=int, default=42, help="random initialization seed")
-    parser.add_argument("--max_uttr_len", type=int, default=40, help="max utterance length for trauncation")
-    parser.add_argument("--dropout", type=float, default=0.2, help="dropout probability")
-    parser.add_argument("--l2_penalty", type=float, default=0.0, help="l2 penalty")
-    parser.add_argument("--optimizer", type=str, default="adam", help="optimizer")
-    parser.add_argument("--init_lr", type=float, default=0.001, help="init learning rate")
-    parser.add_argument("--min_lr", type=float, default=1e-7, help="init learning rate")
-    parser.add_argument("--lr_decay_rate", type=float, default=0.5)
-    parser.add_argument("--gradient_clip", type=float, default=1.0, help="gradient clipping")
-    parser.add_argument("--n_epochs", type=int, default=20, help="number of epochs for training")
-    parser.add_argument("--use_pretrained_word_embedding", type=str2bool, default=True)
-    parser.add_argument("--batch_size", type=int, default=30, help="batch size for training")
-    parser.add_argument("--eval_batch_size", type=int, default=60, help="batch size for evaluation")
+    # -- variational model
+    parser.add_argument("--latent_dim", type=int, default=500)
 
     # inference
+    parser.add_argument("--seed", type=int, default=42, help="random initialization seed")
+    parser.add_argument("--max_uttr_len", type=int, default=40, help="max utterance length for trauncation")
+    parser.add_argument("--eval_batch_size", type=int, default=60, help="batch size for evaluation")
     parser.add_argument("--decode_max_len", type=int, default=40, help="max utterance length for decoding")
-    parser.add_argument("--gen_type", type=str, default="greedy", help="[greedy, sample, top]")
+    parser.add_argument("--gen_type", type=str, default="greedy", help="[greedy, sample, top, mmi_antilm]")
     parser.add_argument("--temp", type=float, default=1.0, help="temperature for decoding")
-    parser.add_argument("--top_k", type=float, default=0)
+    parser.add_argument("--top_k", type=int, default=0)
     parser.add_argument("--top_p", type=float, default=0.0)
+    # -- MMI
+    parser.add_argument("--lm_path", type=str, help="path to pretrained language model")
+    parser.add_argument("--lm_tokenizer", type=str, default="ws", help="[ws, gpt2]")
+    parser.add_argument("--mmi_lambda", type=float, default=0.2)
+    parser.add_argument("--mmi_gamma", type=int, default=5)
 
     # management
     parser.add_argument("--model_path", help="path to model")
-    parser.add_argument("--corpus", type=str, default="dd", help="[dd, cornellmovie]")
+    parser.add_argument("--corpus", type=str, default="dd", help="[dd, cornellmovie, personachat]")
     parser.add_argument("--enable_log", type=str2bool, default=False)
-    parser.add_argument("--save_model", type=str2bool, default=False)
-    parser.add_argument("--check_loss_after_n_step", type=int, default=100)
-    parser.add_argument("--validate_after_n_step", type=int, default=1000)
-    parser.add_argument("--sample_after_n_step", type=int, default=1000)
     config = parser.parse_args()
 
     # load corpus config
@@ -92,13 +83,24 @@ if __name__ == "__main__":
         from corpora.personachat.config import Config
     corpus_config = Config(task="response_gen")
 
-    ## merge parse args with corpus config
+    # merge parse args with corpus config
     # priority: parse args > corpus config
     corpus_config_dict = {}
     for k, v in corpus_config.__dict__.items():
         if not k.startswith("__") and k not in config.__dict__:
             corpus_config_dict[k] = v
     config.__dict__.update(corpus_config_dict)
+
+    # define logger
+    MODEL_NAME = config.model_path[config.model_path.rfind("/")+1:]
+    GEN_METHOD = f"{config.gen_type}_temp{config.temp}_k{config.top_k}_p{config.top_p}"
+    MODEL_NAME = f"{MODEL_NAME}.{GEN_METHOD}"
+
+    def mlog(s):
+        if config.enable_log:
+            with open(f"../log/{config.corpus}/{config.task}/{MODEL_NAME}.eval.log", "a+", encoding="utf-8") as log_f:
+                log_f.write(s+"\n")
+        print(s)
 
     # set random seeds
     torch.manual_seed(config.seed)
@@ -107,17 +109,32 @@ if __name__ == "__main__":
     np.random.seed(config.seed)
 
     # tokenizers
+    special_token_dict = {
+        "speaker1_token": "<speaker1>",
+        "speaker2_token": "<speaker2>"
+    }
     if config.tokenizer == "ws":
-        tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
+        tokenizer = WhiteSpaceTokenizer(
+            word_count_path=config.word_count_path,
+            vocab_size=config.vocab_size,
+            special_token_dict=special_token_dict
+        )
     elif config.tokenizer == "gpt2":
-        tokenizer = ModGPT2Tokenizer()
+        tokenizer = ModGPT2Tokenizer(
+            model_size=config.model_size,
+            special_token_dict=special_token_dict
+        )
 
-    # data loaders & number reporters
+    # data loaders
+    with open(config.dataset_path, encoding="utf-8") as f:
+        dataset = json.load(f)
+    mlog("----- Loading test data -----")
     test_data_source = DataSource(
+        data=dataset["test"],
         config=config,
-        tokenizer=tokenizer,
-        dataset="test"
+        tokenizer=tokenizer
     )
+    mlog(str(test_data_source.statistics))
 
     # metrics calculator
     eval_tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
@@ -140,22 +157,31 @@ if __name__ == "__main__":
 
     # model adaption
     if torch.cuda.is_available():
-        print("----- Using GPU -----")
+        mlog("----- Using GPU -----")
         model = model.cuda()
     if config.model_path:
         model.load_model(config.model_path)
-        print("----- Model loaded -----")
-        print("model path: {}".format(config.model_path))
+        mlog("----- Model loaded -----")
+        mlog("model path: {}".format(config.model_path))
 
-    # define logger
-    MODEL_NAME = config.model_path[config.model_path.rfind("/")+1:]
-    GEN_METHOD = f"{config.gen_type}_temp{config.temp}_k{config.top_k}_p{config.top_p}"
-    MODEL_NAME = f"{MODEL_NAME}.{GEN_METHOD}"
-    def mlog(s):
-        if config.enable_log:
-            with open(f"../log/{config.corpus}/{config.task}/{MODEL_NAME}.eval.log", "a+", encoding="utf-8") as log_f:
-                log_f.write(s+"\n")
-        print(s)
+    if config.gen_type == "mmi_anti_lm":
+        from model.lm.rnnlm import RNNLM
+        from utils.config import ConfigFromDict
+        # MMI decoding
+        lm_tokenizer_config = Config(task="lm")
+        lm_tokenizer = WhiteSpaceTokenizer(
+            word_count_path=lm_tokenizer_config.word_count_path,
+            vocab_size=10000
+        )
+        lm_config = ConfigFromDict({
+            "word_embedding_dim": 200,
+            "decoder_hidden_dim": 500,
+            "n_decoder_layers": 1,
+            "decode_max_len": config.decode_max_len,
+            "tie_weights": True,
+            "rnn_type": "gru",
+        })
+        lm = RNNLM(lm_config, lm_tokenizer)
 
     # log hyper parameters
     start_time = time.time()
@@ -170,12 +196,21 @@ if __name__ == "__main__":
     ctxs = []
     hyps = []
     refs = []
-    for _ in tqdm(range(test_data_source.num_batches(config.eval_batch_size)+1)):
+    for _ in tqdm(range(len(test_data_source)//config.eval_batch_size+1)):
         batch_data = test_data_source.next(config.eval_batch_size)
         if batch_data is None:
             break
 
-        ret_data, ret_stat = model.test_step(batch_data)
+        if config.gen_type == "mmi_anti_lm":
+            mmi_args = {
+                "lm": lm,
+                "lambda": config.mmi_lambda,
+                "gamma": config.mmi_gamma,
+                "tokenizer": tokenizer
+            }
+            ret_data, ret_stat = model.test_step(batch_data, mmi_args=mmi_args)
+        else:
+            ret_data, ret_stat = model.test_step(batch_data)
 
         batch_ctxs = batch_data["X"].tolist()
         batch_floors = batch_data["X_floor"].tolist()
@@ -259,7 +294,7 @@ if __name__ == "__main__":
         with open(f"../log/{config.corpus}/{config.task}/{MODEL_NAME}.eval_samples.json", "w+", encoding="utf-8") as f:
             json.dump(eval_outputs, f)
 
-    ## Evaluation metrics
+    # Evaluation metrics
     # BLEU
     bleu_scores = metrics.batch_bleu(hyp_texts, ref_texts)
     bleu = np.mean(bleu_scores)

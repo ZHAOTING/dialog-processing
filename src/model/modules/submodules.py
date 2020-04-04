@@ -11,6 +11,7 @@ from model.modules.utils import init_module_weights
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class LockedDropout(nn.Module):
     def __init__(self):
         super().__init__()
@@ -28,9 +29,10 @@ class LockedDropout(nn.Module):
         mask = mask.expand_as(x)
         return mask * x
 
+
 class DynamicRNN(nn.Module):
     def __init__(self, input_dim, hidden_dim, n_layers,
-        bidirectional=False, dropout=0.0, rnn_type="gru"):
+                 bidirectional=False, dropout=0.0, rnn_type="gru"):
         super(DynamicRNN, self).__init__()
 
         self.input_dim = input_dim
@@ -47,7 +49,7 @@ class DynamicRNN(nn.Module):
             input_size=input_dim,
             hidden_size=hidden_dim,
             num_layers=n_layers,
-            #dropout=dropout,
+            dropout=dropout,
             batch_first=True,
             bidirectional=bidirectional
         )
@@ -84,11 +86,11 @@ class DynamicRNN(nn.Module):
 
         if self.bidirectional:
             unpacked_outputs = unpacked_outputs.view(B, -1, self.hidden_dim, 2)
-            unpacked_outputs = unpacked_outputs.mean(3) # mean over directions
+            unpacked_outputs = unpacked_outputs.mean(3)  # mean over directions
 
         # last encoding
         if self.rnn_type == "gru":
-            encodings = final_hiddens.mean(0) # mean over directions and layers
+            encodings = final_hiddens.mean(0)  # mean over directions and layers
         elif self.rnn_type == "lstm":
             encodings = torch.cat(final_hiddens, dim=0).mean(0)
 
@@ -105,12 +107,13 @@ class Attention(nn.Module):
             \end{array}
 
     Inputs:
-        query {FloatTensor} -- (batch, query_len, query_dim)
-        context {FloatTensor} -- (batch, context_len, context_dim)
-        mask {BoolTensor} -- (batch, context_len)
+        query {FloatTensor [batch_size, query_len, query_dim]}
+        context {FloatTensor [batch_size, context_len, context_dim]}
+        mask {BoolTensor [batch_size, context_len]}
 
     Returns:
-        [type] -- [description]
+        output {FloatTensor [batch_size, query_len, query_dim]}
+        attn {FloatTensor [batch_size, query_len, context_len]}
     """
 
     def __init__(self, query_dim, context_dim, hidden_dim, coverage=False):
@@ -139,11 +142,11 @@ class Attention(nn.Module):
         context_len = context.size(1)
 
         # see math formula
-        mapped_context = self.w_context(context) # [batch_size, context_len, hidden_dim]
-        mapped_query = self.w_query(query) # [batch_size, query_len, hidden_dim]
-        tiled_context = mapped_context.unsqueeze(1) # [batch_size, 1, context_len, hidden_dim]
-        tiled_query = mapped_query.unsqueeze(2).repeat(1, 1, context_len, 1) # [batch_size, query_len, context_len, hidden_dim]
-        emission_input = torch.tanh(tiled_context+tiled_query) # [batch_size, query_len, context_len, hidden_dim]
+        mapped_context = self.w_context(context)  # [batch_size, context_len, hidden_dim]
+        mapped_query = self.w_query(query)  # [batch_size, query_len, hidden_dim]
+        tiled_context = mapped_context.unsqueeze(1)  # [batch_size, 1, context_len, hidden_dim]
+        tiled_query = mapped_query.unsqueeze(2).repeat(1, 1, context_len, 1)  # [batch_size, query_len, context_len, hidden_dim]
+        emission_input = torch.tanh(tiled_context+tiled_query)  # [batch_size, query_len, context_len, hidden_dim]
         emission = self.w_emit(emission_input).squeeze(-1)  # [batch_size, query_len, context_len]
 
         # mask out unneeded contexts
@@ -163,72 +166,14 @@ class Attention(nn.Module):
         weighted_context = torch.bmm(attn, context)  # [batch, query_len, context_dim]
 
         # combined weighted_context and query
-        combined = torch.cat((weighted_context, query), dim=2) # [batch, query_len, context_dim+query_dim]
+        combined = torch.cat((weighted_context, query), dim=2)  # [batch, query_len, context_dim+query_dim]
         output = torch.tanh(self.linear_out(combined))  # [batch, query_len, query_dim]
 
         return output, attn
 
 
-class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dropout_prob):
-        super(MultiHeadSelfAttention, self).__init__()
+# Floor encoders
 
-        self.hidden_dim = hidden_dim
-        self.num_heads = num_heads
-        self.dropout_prob = dropout_prob
-
-        if self.hidden_dim % self.num_heads != 0:
-            raise ValueError(
-                "The hidden size (%d) is not a multiple of the number of attention "
-                "heads (%d)" % (self.hidden_dim, self.num_heads))
-
-        self.head_dim = int(self.hidden_dim / self.num_heads)
-        self.all_head_size = self.num_heads * self.head_dim
-
-        self.query = nn.Linear(self.hidden_dim, self.all_head_size)
-        self.key = nn.Linear(self.hidden_dim, self.all_head_size)
-        self.value = nn.Linear(self.hidden_dim, self.all_head_size)
-
-        self.dropout = nn.Dropout(self.dropout_prob)
-
-    def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_heads, self.head_dim)
-        x = x.view(*new_x_shape)
-        return x.permute(0, 2, 1, 3)
-
-    def forward(self, inputs, attn_mask):
-        mixed_query_layer = self.query(inputs)
-        mixed_key_layer = self.key(inputs)
-        mixed_value_layer = self.value(inputs)
-
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-        key_layer = self.transpose_for_scores(mixed_key_layer)
-        value_layer = self.transpose_for_scores(mixed_value_layer)
-
-        # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.head_dim)
-        # Apply the attention mask
-        ignore_mask = 1 - attn_mask.unsqueeze(1).unsqueeze(2).float()
-        ignore_mask2scores = ignore_mask * (-10000.0)
-        attention_scores = attention_scores + ignore_mask2scores
-
-        # Normalize the attention scores to probabilities.
-        attention_probs = nn.Softmax(dim=-1)(attention_scores)
-
-        # This is actually dropping out entire tokens to attend to, which might
-        # seem a bit unusual, but is taken from the original Transformer paper.
-        attention_probs = self.dropout(attention_probs)
-
-        context_layer = torch.matmul(attention_probs, value_layer)
-
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(*new_context_layer_shape)
-
-        return context_layer, attention_probs
-
-## Floor encoders
 class AbsFloorOneHotEncoder(nn.Module):
     def __init__(self, input_dim):
         super(AbsFloorOneHotEncoder, self).__init__()
@@ -247,6 +192,7 @@ class AbsFloorOneHotEncoder(nn.Module):
         outputs = self.linear(encodings)
 
         return outputs
+
 
 class RelFloorOneHotEncoder(nn.Module):
     def __init__(self, input_dim):
@@ -268,6 +214,7 @@ class RelFloorOneHotEncoder(nn.Module):
         outputs = self.linear(encodings)
 
         return outputs
+
 
 class AbsFloorEmbEncoder(nn.Module):
     def __init__(self, input_dim, embedding_dim):
@@ -291,6 +238,7 @@ class AbsFloorEmbEncoder(nn.Module):
         outputs = self.linear(encodings)
 
         return outputs
+
 
 class RelFloorEmbEncoder(nn.Module):
     def __init__(self, input_dim, embedding_dim):
@@ -316,7 +264,9 @@ class RelFloorEmbEncoder(nn.Module):
 
         return outputs
 
-## Variational modules
+
+# Variational modules
+
 class GaussianVariation(nn.Module):
     def __init__(self, input_dim, z_dim):
         super(GaussianVariation, self).__init__()
@@ -343,3 +293,51 @@ class GaussianVariation(nn.Module):
         epsilon = torch.randn([batch_size, self.z_dim]).to(DEVICE)
         z = epsilon * std + mu
         return z, mu, var
+
+
+class MixGaussianVariation(nn.Module):
+    def __init__(self, input_dim, z_dim, n_components, var=None):
+        super(MixGaussianVariation, self).__init__()
+        self.input_dim = input_dim
+        self.z_dim = z_dim
+        self.n_components = n_components
+        self.var = var
+
+        self.ctx_fc = nn.Linear(input_dim, z_dim)
+        self.pi_fc = nn.Linear(z_dim, n_components)
+        self.ctx2mu = nn.Linear(z_dim, z_dim*n_components)
+        self.ctx2var = nn.Linear(z_dim, z_dim*n_components)
+
+        self.init_weights()
+
+    def init_weights(self):
+        init_module_weights(self.ctx_fc)
+        init_module_weights(self.pi_fc)
+        init_module_weights(self.ctx2mu)
+        init_module_weights(self.ctx2var)
+
+    def forward(self, context, gumbel_temp=0.1, hard_sampling=True, assign_k=None):
+        batch_size, _ = context.size()
+        context = torch.tanh(self.ctx_fc(context))
+        scores = self.pi_fc(context)
+        pi = F.gumbel_softmax(scores, tau=gumbel_temp, hard=hard_sampling, eps=1e-10)
+        pi = pi.unsqueeze(1)
+        if assign_k is not None:
+            pi = [0.0 for _ in range(self.n_components)]
+            pi[assign_k] = 1.0
+            pi = torch.FloatTensor(pi).view(1, 1, self.n_components).to(DEVICE)
+            pi = pi.repeat(batch_size, 1, 1)
+        mu = self.ctx2mu(context)
+        if self.var is None:
+            var = F.softplus(self.ctx2var(context))
+        else:
+            var = torch.FloatTensor([self.var]).to(DEVICE)
+            var = var.unsqueeze(1).expand_as(mu)
+        std = torch.sqrt(var)
+
+        epsilon = torch.randn([batch_size, self.n_components*self.z_dim]).to(DEVICE)
+        z = (epsilon * std + mu).view(batch_size, self.n_components, self.z_dim)
+        z = torch.bmm(pi, z).squeeze(1)  # [batch_size, z_dim]
+        mu = torch.bmm(pi, mu.view(batch_size, self.n_components, self.z_dim)).squeeze(1)
+        var = torch.bmm(pi, var.view(batch_size, self.n_components, self.z_dim)).squeeze(1)
+        return z, mu, var, scores

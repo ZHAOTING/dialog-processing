@@ -21,11 +21,13 @@ extracted_dir = f"{config.raw_data_dir}/cornell"
 lines_file_path = f"{extracted_dir}/movie_lines.txt"
 conv_file_path = f"{extracted_dir}/movie_conversations.txt"
 
+
 def clean_cornellmovie_text(text):
     text = text.replace("<u>", "")
     text = text.replace("</u>", "")
     text = standardize_english_text(text)
     return text
+
 
 def download_data():
     """Download and unpack dialogs"""
@@ -41,9 +43,10 @@ def download_data():
 
         os.rename(f"{config.raw_data_dir}/cornell movie-dialogs corpus", extracted_dir)
 
+
 def load_lines(fileName,
-              fields=["lineID", "characterID", "movieID", "character", "text"],
-              delimiter=" +++$+++ "):
+               fields=["lineID", "characterID", "movieID", "character", "text"],
+               delimiter=" +++$+++ "):
     lines = {}
 
     with open(fileName, 'r', encoding='iso-8859-1') as f:
@@ -59,9 +62,10 @@ def load_lines(fileName,
 
     return lines
 
+
 def load_conversations(fileName, lines,
-                      fields=["character1ID", "character2ID", "movieID", "utteranceIDs"],
-                      delimiter=" +++$+++ "):
+                       fields=["character1ID", "character2ID", "movieID", "utteranceIDs"],
+                       delimiter=" +++$+++ "):
     conversations = []
 
     with open(fileName, 'r', encoding='iso-8859-1') as f:
@@ -85,6 +89,7 @@ def load_conversations(fileName, lines,
 
     return conversations
 
+
 def train_dev_test_split_by_conversation(conversations, split_ratio=[0.8, 0.1, 0.1]):
     train_ratio, dev_ratio, test_ratio = split_ratio
     assert train_ratio + dev_ratio + test_ratio == 1.0
@@ -103,6 +108,7 @@ def train_dev_test_split_by_conversation(conversations, split_ratio=[0.8, 0.1, 0
     dev = conversations[train_split:dev_split]
     test = conversations[dev_split:]
     return train, dev, test
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -133,6 +139,7 @@ if __name__ == '__main__':
     print(f'Test set: {len(test)} conversations')
 
     nlp = spacy.load('en_core_web_sm')
+    
     def tokenize_conversation(conv):
         def tokenize(string):
             return [token.text for token in nlp(clean_cornellmovie_text(string))]

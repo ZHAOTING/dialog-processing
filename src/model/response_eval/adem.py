@@ -7,6 +7,8 @@ import random
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import numpy as np
+from sklearn.decomposition import PCA
 
 from model.modules.encoders import EncoderRNN
 from model.modules.decoders import DecoderRNN
@@ -16,9 +18,9 @@ from model.modules.utils import init_module_weights, init_word_embedding
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class HRED(nn.Module):
+class ADEM(nn.Module):
     def __init__(self, config, tokenizer):
-        super(HRED, self).__init__()
+        super(ADEM, self).__init__()
 
         # Attributes
         # Attributes from config
@@ -28,18 +30,13 @@ class HRED(nn.Module):
         self.n_sent_encoder_layers = config.n_sent_encoder_layers
         self.dial_encoder_hidden_dim = config.dial_encoder_hidden_dim
         self.n_dial_encoder_layers = config.n_dial_encoder_layers
-        self.decoder_hidden_dim = config.decoder_hidden_dim
-        self.n_decoder_layers = config.n_decoder_layers
-        self.use_attention = config.use_attention
-        self.decode_max_len = config.decode_max_len
+        assert self.sent_encoder_hidden_dim == self.dial_encoder_hidden_dim
+        self.latent_variable_dim = config.latent_dim
         self.tie_weights = config.tie_weights
         self.rnn_type = config.rnn_type
-        self.gen_type = config.gen_type
-        self.top_k = config.top_k
-        self.top_p = config.top_p
-        self.temp = config.temp
         self.word_embedding_path = config.word_embedding_path
         self.floor_encoder_type = config.floor_encoder
+        self.metric = config.metric_type
         # Optional attributes from config
         self.dropout_emb = config.dropout if hasattr(config, "dropout") else 0.0
         self.dropout_input = config.dropout if hasattr(config, "dropout") else 0.0
@@ -47,12 +44,10 @@ class HRED(nn.Module):
         self.dropout_output = config.dropout if hasattr(config, "dropout") else 0.0
         self.use_pretrained_word_embedding = config.use_pretrained_word_embedding if hasattr(config, "use_pretrained_word_embedding") else False
         # Other attributes
-        self.word2id = tokenizer.word2id
         self.id2word = tokenizer.id2word
         self.vocab_size = len(tokenizer.word2id)
         self.pad_token_id = tokenizer.pad_token_id
-        self.bos_token_id = tokenizer.bos_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        self.n_pca_components = 50
 
         # Input components
         self.word_embedding = nn.Embedding(
@@ -90,35 +85,16 @@ class HRED(nn.Module):
             dropout_input=self.dropout_input,
             dropout_hidden=self.dropout_hidden,
             dropout_output=self.dropout_output,
-            bidirectional=False,
+            bidirectional=True,
             rnn_type=self.rnn_type,
         )
+        self.pca = PCA(n_components=self.n_pca_components)
 
-        # Decoding components
-        self.enc2dec_hidden_fc = nn.Linear(
-            self.dial_encoder_hidden_dim,
-            self.n_decoder_layers*self.decoder_hidden_dim if self.rnn_type == "gru" else self.n_decoder_layers*self.decoder_hidden_dim*2
-        )
-        self.decoder = DecoderRNN(
-            vocab_size=len(self.word2id),
-            input_dim=self.word_embedding_dim,
-            hidden_dim=self.decoder_hidden_dim,
-            feat_dim=self.dial_encoder_hidden_dim,
-            n_layers=self.n_decoder_layers,
-            bos_token_id=self.bos_token_id,
-            eos_token_id=self.eos_token_id,
-            pad_token_id=self.pad_token_id,
-            max_len=self.decode_max_len,
-            dropout_emb=self.dropout_emb,
-            dropout_input=self.dropout_input,
-            dropout_hidden=self.dropout_hidden,
-            dropout_output=self.dropout_output,
-            embedding=self.word_embedding,
-            tie_weights=self.tie_weights,
-            rnn_type=self.rnn_type,
-            use_attention=self.use_attention,
-            attn_dim=self.sent_encoder_hidden_dim
-        )
+        # Scoring components
+        self.M = nn.Linear(self.n_pca_components, self.n_pca_components)
+        self.N = nn.Linear(self.n_pca_components, self.n_pca_components)
+        self.alpha = None
+        self.beta = None
 
         # Extra components
         # floor encoding
@@ -138,31 +114,28 @@ class HRED(nn.Module):
         # Initialization
         self._init_weights()
 
-    def _init_weights(self):
-        init_module_weights(self.enc2dec_hidden_fc)
+    def _reset_optimizer_for_finetuning(self):
+        params = list(self.M.parameters()) + list(self.N.parameters())
 
-    def _init_dec_hiddens(self, context):
-        batch_size = context.size(0)
-
-        hiddens = self.enc2dec_hidden_fc(context)
-        if self.rnn_type == "gru":
-            hiddens = hiddens.view(
-                batch_size,
-                self.n_decoder_layers,
-                self.decoder_hidden_dim
-            ).transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
-        elif self.rnn_type == "lstm":
-            hiddens = hiddens.view(
-                batch_size,
-                self.n_decoder_layers,
-                self.decoder_hidden_dim,
-                2
+        if self.optimizer_type == "adam":
+            self.optimizer = optim.AdamW(
+                params,
+                lr=self.init_lr,
+                weight_decay=self.l2_penalty
             )
-            h = hiddens[:, :, :, 0].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
-            c = hiddens[:, :, :, 1].transpose(0, 1).contiguous()  # (n_layers, batch_size, hidden_dim)
-            hiddens = (h, c)
+        elif self.optimizer_type == "sgd":
+            self.optimizer = optim.SGD(
+                params,
+                lr=self.init_lr,
+                weight_decay=self.l2_penalty
+            )
 
-        return hiddens
+    def _init_weights(self):
+        # diagonal initialization
+        nn.init.eye(self.M.weight)
+        self.M.bias.data.fill_(0)
+        nn.init.eye(self.N.weight)
+        self.N.bias.data.fill_(0)
 
     def _encode(self, inputs, input_floors, output_floors):
         batch_size, history_len, max_x_sent_len = inputs.size()
@@ -190,47 +163,51 @@ class HRED(nn.Module):
 
         return word_encodings, sent_encodings, dialog_encodings
 
-    def _decode(self, inputs, context, attn_ctx=None, attn_mask=None):
-        batch_size = context.size(0)
-        hiddens = self._init_dec_hiddens(context)
-        feats = None
-        feats = context.unsqueeze(1).repeat(1, inputs.size(1), 1)
-        ret_dict = self.decoder.forward(
-            batch_size=batch_size,
-            inputs=inputs,
-            hiddens=hiddens,
-            feats=feats,
-            attn_ctx=attn_ctx,
-            attn_mask=attn_mask,
-            mode=DecoderRNN.MODE_TEACHER_FORCE
-        )
+    def _compute_scores(self, inputs, outputs, references, input_floors, output_floors):
+        batch_size = inputs.size(0)
 
-        return ret_dict
+        with torch.no_grad():
+            # context encodings
+            _, _, ctx_encodings = self._encode(inputs, input_floors, output_floors)
 
-    def _sample(self, context, attn_ctx=None, attn_mask=None, mmi_args=None):
-        batch_size = context.size(0)
-        hiddens = self._init_dec_hiddens(context)
-        feats = None
-        feats = context.unsqueeze(1).repeat(1, self.decode_max_len, 1)
-        ret_dict = self.decoder.forward(
-            batch_size=batch_size,
-            hiddens=hiddens,
-            feats=feats,
-            attn_ctx=attn_ctx,
-            attn_mask=attn_mask,
-            mode=DecoderRNN.MODE_FREE_RUN,
-            gen_type=self.gen_type,
-            temp=self.temp,
-            top_p=self.top_p,
-            top_k=self.top_k,
-            mmi_args=mmi_args
-        )
+            # response encodings
+            output_lens = (outputs != self.pad_token_id).sum(-1)
+            _, _, response_encodings = self.sent_encoder(outputs, output_lens)
+            reference_lens = (references != self.pad_token_id).sum(-1)
+            _, _, reference_encodings = self.sent_encoder(references, reference_lens)
 
-        return ret_dict
+            # transform using PCA
+            ctx_encodings = self.pca.transform(ctx_encodings.cpu())
+            response_encodings = self.pca.transform(response_encodings.cpu())
+            reference_encodings = self.pca.transform(reference_encodings.cpu())
 
-    def _get_attn_mask(self, attn_keys):
-        attn_mask = (attn_keys != self.pad_token_id)
-        return attn_mask
+            # convert np arrays back to tensors
+            ctx_encodings = torch.FloatTensor(ctx_encodings).to(DEVICE)
+            response_encodings = torch.FloatTensor(response_encodings).to(DEVICE)
+            reference_encodings = torch.FloatTensor(reference_encodings).to(DEVICE)
+
+        # compute scores
+        m_response_encodings = self.M(response_encodings)
+        n_response_encodings = self.N(response_encodings)
+        pred1 = torch.bmm(
+            ctx_encodings.view(batch_size, 1, -1),
+            m_response_encodings.view(batch_size, -1, 1)
+        ).view(batch_size)
+        pred2 = torch.bmm(
+            reference_encodings.view(batch_size, 1, -1),
+            n_response_encodings.view(batch_size, -1, 1)
+        ).view(batch_size)
+
+        if self.metric == "hybrid":
+            pred = pred1 + pred2
+        elif self.metric == "ref":
+            pred = pred2
+        elif self.metric == "unref":
+            pred = pred1
+
+        scores = 3 + 4 * (pred - self.alpha) / self.beta
+
+        return scores
 
     def load_model(self, model_path):
         """Load pretrained model weights from model_path
@@ -242,9 +219,101 @@ class HRED(nn.Module):
             model_path,
             map_location=lambda storage, loc: storage
         )
-        self.load_state_dict(pretrained_state_dict)
 
-    def train_step(self, data):
+        own_state_dict = self.state_dict()
+        for name, param in pretrained_state_dict.items():
+            if name in own_state_dict:
+                own_state_dict[name].data = param.data
+
+        self.load_state_dict(own_state_dict)
+
+        self._reset_optimizer_for_finetuning()
+
+    def estimate_pca_parameters(self, train_data_source):
+        self.eval()
+        C, R, R_hat = [], [], []
+        with torch.no_grad():
+            train_data_source.epoch_init(shuffle=False)
+            while True:
+                batch_data = train_data_source.next(100)
+                if batch_data is None:
+                    break
+
+                X, Y, Y_ref = batch_data["X"], batch_data["Y"], batch_data["Y_ref"]
+                X_floor, Y_floor = batch_data["X_floor"], batch_data["Y_floor"]
+
+                # context encodings
+                _, _, ctx_encodings = self._encode(X, X_floor, Y_floor)
+
+                # response encodings
+                Y_len = (Y != self.pad_token_id).sum(-1)
+                _, _, response_encodings = self.sent_encoder(Y, Y_len)
+                Y_ref_len = (Y_ref != self.pad_token_id).sum(-1)
+                _, _, reference_encodings = self.sent_encoder(Y_ref, Y_ref_len)
+
+                C += ctx_encodings.tolist()
+                R += reference_encodings.tolist()
+                R_hat += response_encodings.tolist()
+
+        if self.metric == "hybrid":
+            embeddings = np.array(C+R+R_hat)
+        elif self.metric == "ref":
+            embeddings = np.array(R+R_hat)
+        elif self.metric == "unref":
+            embeddings = np.array(C+R_hat)
+        self.pca.fit(embeddings)
+
+        print("Estimated PCA Variance:")
+        print(f"  var ratio = {self.pca.explained_variance_ratio_}")
+        print(f"  sum = {np.sum(self.pca.explained_variance_ratio_)}")
+
+    def estimate_scaling_constants(self, train_data_source):
+        self.eval()
+        C, R, R_hat = [], [], []
+        with torch.no_grad():
+            train_data_source.epoch_init(shuffle=False)
+            while True:
+                batch_data = train_data_source.next(100)
+                if batch_data is None:
+                    break
+
+                X, Y, Y_ref = batch_data["X"], batch_data["Y"], batch_data["Y_ref"]
+                X_floor, Y_floor = batch_data["X_floor"], batch_data["Y_floor"]
+
+                # context encodings
+                _, _, ctx_encodings = self._encode(X, X_floor, Y_floor)
+
+                # response encodings
+                Y_len = (Y != self.pad_token_id).sum(-1)
+                _, _, response_encodings = self.sent_encoder(Y, Y_len)
+                Y_ref_len = (Y_ref != self.pad_token_id).sum(-1)
+                _, _, reference_encodings = self.sent_encoder(Y_ref, Y_ref_len)
+
+                # transform using PCA
+                ctx_encodings = self.pca.transform(ctx_encodings.cpu())
+                response_encodings = self.pca.transform(response_encodings.cpu())
+                reference_encodings = self.pca.transform(reference_encodings.cpu())
+
+                C += ctx_encodings.tolist()
+                R += reference_encodings.tolist()
+                R_hat += response_encodings.tolist()
+
+        C = np.array(C)
+        R = np.array(R)
+        R_hat = np.array(R_hat)
+
+        prod_list = []
+        for i in range(len(C)):
+            term = 0
+            term += np.dot(C[i], R_hat[i])
+            term += np.dot(R[i], R_hat[i])
+            prod_list.append(term)
+        self.alpha = np.mean(prod_list)
+        self.beta = max(prod_list) - min(prod_list)
+
+        print(f"Estimated scaling factors alpha = {self.alpha}, beta = {self.beta}")
+
+    def supervised_train_step(self, data):
         """One training step
 
         Arguments:
@@ -253,59 +322,46 @@ class HRED(nn.Module):
                 'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
                 'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
                 'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
+                'Y_ref' {LongTensor [batch_size, max_y_ref_sent_len]} -- token ids of referencee response sentence
+                'Y_tgt_score' {FloatTensor [batch_size]} -- target score of response sentence
 
         Returns:
             dict of data -- returned keys and values
                 'loss' {FloatTensor []} -- loss to backword
             dict of statistics -- returned keys and values
-                'ppl' {float} -- perplexity
                 'loss' {float} -- batch loss
         """
-        X, Y = data["X"], data["Y"]
+        X, Y, Y_ref = data["X"], data["Y"], data["Y_ref"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
-        Y_in = Y[:, :-1].contiguous()
-        Y_out = Y[:, 1:].contiguous()
+        Y_tgt_score = data["Y_tgt_score"]
 
-        batch_size = X.size(0)
-
-        # Forward
-        word_encodings, sent_encodings, dial_encodings = self._encode(
+        # forward
+        scores = self._compute_scores(
             inputs=X,
+            outputs=Y,
+            references=Y_ref,
             input_floors=X_floor,
             output_floors=Y_floor
         )
-        attn_ctx = word_encodings.view(batch_size, -1, word_encodings.size(-1))
-        attn_mask = self._get_attn_mask(X.view(batch_size, -1))
-        decoder_ret_dict = self._decode(
-            inputs=Y_in,
-            context=dial_encodings,
-            attn_ctx=attn_ctx,
-            attn_mask=attn_mask
-        )
 
-        # Calculate loss
-        loss = 0
-        word_loss = F.cross_entropy(
-            decoder_ret_dict["logits"].view(-1, self.vocab_size),
-            Y_out.view(-1),
-            ignore_index=self.decoder.pad_token_id,
+        # loss
+        loss = F.mse_loss(
+            scores,
+            Y_tgt_score,
             reduction="mean"
         )
-        ppl = torch.exp(word_loss)
-        loss = word_loss
 
         # return dicts
         ret_data = {
             "loss": loss
         }
         ret_stat = {
-            "ppl": ppl.item(),
             "loss": loss.item()
         }
 
         return ret_data, ret_stat
 
-    def evaluate_step(self, data):
+    def supervised_evaluate_step(self, data):
         """One evaluation step
 
         Arguments:
@@ -314,94 +370,78 @@ class HRED(nn.Module):
                 'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
                 'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
                 'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
+                'Y_ref' {LongTensor [batch_size, max_y_ref_sent_len]} -- token ids of referencee response sentence
+                'Y_tgt_score' {FloatTensor [batch_size]} -- target score of response sentence
 
         Returns:
             dict of data -- returned keys and values
 
             dict of statistics -- returned keys and values
-                'ppl' {float} -- perplexity
                 'monitor' {float} -- a monitor number for learning rate scheduling
         """
-        X, Y = data["X"], data["Y"]
+        X, Y, Y_ref = data["X"], data["Y"], data["Y_ref"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
-        Y_in = Y[:, :-1].contiguous()
-        Y_out = Y[:, 1:].contiguous()
+        Y_tgt_score = data["Y_tgt_score"]
 
         batch_size = X.size(0)
 
         with torch.no_grad():
-            # Forward
-            word_encodings, sent_encodings, dial_encodings = self._encode(
+            # forward
+            scores = self._compute_scores(
                 inputs=X,
+                outputs=Y,
+                references=Y_ref,
                 input_floors=X_floor,
                 output_floors=Y_floor
             )
-            attn_ctx = word_encodings.view(batch_size, -1, word_encodings.size(-1))
-            attn_mask = self._get_attn_mask(X.view(batch_size, -1))
-            decoder_ret_dict = self._decode(
-                inputs=Y_in,
-                context=dial_encodings,
-                attn_ctx=attn_ctx,
-                attn_mask=attn_mask
-            )
 
-            # Loss
-            word_loss = F.cross_entropy(
-                decoder_ret_dict["logits"].view(-1, self.vocab_size),
-                Y_out.view(-1),
-                ignore_index=self.decoder.pad_token_id,
+            # loss
+            loss = F.mse_loss(
+                scores,
+                Y_tgt_score,
                 reduction="mean"
             )
-            ppl = torch.exp(word_loss)
 
         # return dicts
         ret_data = {}
         ret_stat = {
-            "ppl": ppl.item(),
-            "monitor": ppl.item()
+            "monitor": loss.item()
         }
 
         return ret_data, ret_stat
 
-    def test_step(self, data, mmi_args=None):
+    def supervised_test_step(self, data):
         """One test step
 
         Arguments:
             data {dict of data} -- required keys and values:
                 'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
                 'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
+                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
                 'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
-
-            mmi_args {dict}
+                'Y_ref' {LongTensor [batch_size, max_y_ref_sent_len]} -- token ids of referencee response sentence
 
         Returns:
             dict of data -- returned keys and values
-                'symbols' {LongTensor [batch_size, max_decode_len]} -- token ids of response hypothesis
+                'scores' {FloatTensor [batch_size]} -- predicted score of response
             dict of statistics -- returned keys and values
 
         """
-        X, Y = data["X"], data["Y"]
+        X, Y, Y_ref = data["X"], data["Y"], data["Y_ref"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
-        batch_size = X.size(0)
 
         with torch.no_grad():
-            # Forward
-            word_encodings, sent_encodings, dial_encodings = self._encode(
+            # forward
+            scores = self._compute_scores(
                 inputs=X,
+                outputs=Y,
+                references=Y_ref,
                 input_floors=X_floor,
                 output_floors=Y_floor
             )
-            attn_ctx = word_encodings.view(batch_size, -1, word_encodings.size(-1))
-            attn_mask = self._get_attn_mask(X.view(batch_size, -1))
-            decoder_ret_dict = self._sample(
-                context=dial_encodings,
-                attn_ctx=attn_ctx,
-                attn_mask=attn_mask,
-                mmi_args=mmi_args
-            )
 
         ret_data = {
-            "symbols": decoder_ret_dict["symbols"]
+            "scores": scores
         }
         ret_stat = {}
 

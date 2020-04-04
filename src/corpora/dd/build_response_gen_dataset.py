@@ -20,11 +20,13 @@ raw_data_dir = config.raw_data_dir
 zipfile_path = f"{config.raw_data_dir}/dailydialog.zip"
 extracted_dir = f"{config.raw_data_dir}/dailydialog"
 
+
 def clean_dd_text(text):
     text = standardize_english_text(text)
     text = re.sub(r"(\w)n ' (t\W)", r"\1 n'\2", text)
     text = re.sub(r" ' (m|s|re|ve|d|ll)(\W)", r" '\1\2", text)
     return text
+
 
 def download_data():
     """Download and unpack dialogs"""
@@ -39,6 +41,7 @@ def download_data():
         zip_ref.close()
 
         os.rename(f"{config.raw_data_dir}/ijcnlp_dailydialog", extracted_dir)
+
 
 def load_txt_files(text_filepath, da_filepath, topic_filepath, emotion_filepath):
     dialogs = []
@@ -77,22 +80,23 @@ def load_txt_files(text_filepath, da_filepath, topic_filepath, emotion_filepath)
 
     return dialogs, dialog_das, dialog_emotions, dialog_topics
 
+
 def aggregate_valid_conversations(_dialog_uttrs, _dialog_das, _dialog_emotions, _dialog_topics):
-    ## Collect valid conversations
+    # Collect valid conversations
     dialogs = []
     n_unmatch = 0
     n_duplicate = 0
     duplicate_uttrs_record = {}
     for uttrs, dialog_acts, emotions, topic in zip(_dialog_uttrs, _dialog_das, _dialog_emotions, _dialog_topics):
 
-        ## skip unmatched dialog
+        # skip unmatched dialog
         try:
             assert len(uttrs) == len(dialog_acts) and len(uttrs) == len(emotions)
-        except:
+        except AssertionError:
             n_unmatch += 1
             continue
 
-        ## skip duplicate dialog
+        # skip duplicate dialog
         n_duplicate_uttrs = 0
         for uttr in uttrs:
             if uttr in duplicate_uttrs_record:
@@ -107,6 +111,7 @@ def aggregate_valid_conversations(_dialog_uttrs, _dialog_das, _dialog_emotions, 
     print(f"{n_duplicate} dialogs duplicated")
 
     return dialogs
+
 
 def train_dev_test_split_by_topic(sessions):
     topic2sessions = collections.defaultdict(list)
@@ -124,6 +129,7 @@ def train_dev_test_split_by_topic(sessions):
         dataset["test"] += test_split
 
     return dataset
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -155,6 +161,7 @@ if __name__ == "__main__":
 
     print("Building sessions...")
     nlp = spacy.load('en_core_web_sm')
+    
     def build_session(dialog):
         uttrs, dialog_acts, emotions, topic = dialog
         session = {

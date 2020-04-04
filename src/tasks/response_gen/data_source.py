@@ -10,32 +10,23 @@ import torch
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class DataSource():
 
-    def __init__(self, config, tokenizer, dataset):
-        ## Attributes
+    def __init__(self, data, config, tokenizer):
+        # Attributes
         # Attributes from config
         self.dataset_path = config.dataset_path
         self.max_uttr_len = config.max_uttr_len
         self.history_len = config.history_len
         # Other attributes
         self.tokenizer = tokenizer
-        self.dataset = dataset
         self.num_segments = 0
         self.statistics = {"n_sessions": 0, "n_uttrs": 0, "n_tokens": 0}
 
-        ## Load dataset from json file
-        print("Reading {} dataset...".format(dataset))
-        with open(self.dataset_path, encoding="utf-8") as f:
-            self.data = json.load(f)
-        if dataset == "train":
-            sessions = self.data["train"]
-        elif dataset == "dev":
-            sessions = self.data["dev"]
-        elif dataset == "test":
-            sessions = self.data["test"]
+        sessions = data
 
-        ## Process sessions
+        # Process sessions
         for sess in sessions:
             for uttr in sess["utterances"]:
                 text = uttr["text"]
@@ -50,7 +41,7 @@ class DataSource():
                     "floor_id": floor_id,
                 })
 
-        ## Get segments
+        # Get segments
         self._segments = []
         for sess in sessions:
             uttrs = sess["utterances"]
@@ -62,13 +53,13 @@ class DataSource():
                 }
                 self._segments.append(segment)
 
-        ## Calculate basic statistics
+        # Calculate basic statistics
         self.statistics["n_sessions"] = len(sessions)
         for sess in sessions:
             self.statistics["n_uttrs"] += len(sess["utterances"])
             for uttr in sess["utterances"]:
+                tokens = uttr["text"].split(" ")
                 self.statistics["n_tokens"] += len(tokens)
-        print(self.statistics)
 
     def epoch_init(self, shuffle=False):
         self.cur_segment_idx = 0
@@ -78,19 +69,26 @@ class DataSource():
         else:
             self.segments = self._segments
 
-        print("{} datapoints in total in {} dataset".format(len(self.segments), self.dataset))
-
-    def num_batches(self, batch_size):
-        return len(self._segments)//batch_size
+    def __len__(self):
+        return len(self._segments)
 
     def next(self, batch_size):
-        ## Return None when running out of segments
+        # Return None when running out of segments
         if self.cur_segment_idx == len(self.segments):
             return None
 
-        ## Data to fill in
+        # Data to fill in
         X, Y = [], []
         X_floor, Y_floor = [], []
+
+        empty_sent = ""
+        empty_tokens = self.tokenizer.convert_string_to_tokens(empty_sent)
+        empty_ids = self.tokenizer.convert_tokens_to_ids(empty_tokens, bos_and_eos=True)
+        padding_uttr = {
+            "tokens": empty_tokens,
+            "token_ids": empty_ids,
+            "floor_id": 0,
+        }
 
         while self.cur_segment_idx < len(self.segments):
             if len(Y) == batch_size:
@@ -100,27 +98,18 @@ class DataSource():
             segment_uttrs = segment["utterances"]
             self.cur_segment_idx += 1
 
-            empty_sent = ""
-            empty_tokens = self.tokenizer.convert_string_to_tokens(empty_sent)
-            empty_ids = self.tokenizer.convert_tokens_to_ids(empty_tokens, bos_and_eos=True)
-            padding_uttr = {
-                "tokens": empty_tokens,
-                "token_ids": empty_ids,
-                "floor_id": 0,
-            }
-
-            ## First non-padding input uttrs
+            # First non-padding input uttrs
             for uttr in segment_uttrs[:-1]:
                 X.append(uttr["token_ids"])
                 X_floor.append(uttr["floor_id"])
 
-            ## Then padding input uttrs
+            # Then padding input uttrs
             for _ in range(self.history_len-len(segment_uttrs)+1):
                 uttr = padding_uttr
                 X.append(uttr["token_ids"])
                 X_floor.append(uttr["floor_id"])
 
-            ## Last output uttr
+            # Last output uttr
             uttr = segment_uttrs[-1]
             Y.append(uttr["token_ids"])
             Y_floor.append(uttr["floor_id"])
@@ -135,7 +124,7 @@ class DataSource():
         X_floor = torch.LongTensor(X_floor).to(DEVICE).view(batch_size, history_len)
 
         Y = torch.LongTensor(Y).to(DEVICE)
-        Y_floor= torch.LongTensor(Y_floor).to(DEVICE)
+        Y_floor = torch.LongTensor(Y_floor).to(DEVICE)
 
         batch_data_dict = {
             "X": X,

@@ -6,7 +6,6 @@ import random
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.nn import functional as F
 
 from model.modules.encoders import EncoderRNN
@@ -15,11 +14,12 @@ from model.modules.utils import init_module_weights, init_word_embedding
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class HRE(nn.Module):
     def __init__(self, config, tokenizer):
         super(HRE, self).__init__()
 
-        ## Attributes
+        # Attributes
         # Attributes from config
         self.num_labels = len(config.dialog_acts)
         self.word_embedding_dim = config.word_embedding_dim
@@ -28,25 +28,22 @@ class HRE(nn.Module):
         self.n_sent_encoder_layers = config.n_sent_encoder_layers
         self.dial_encoder_hidden_dim = config.dial_encoder_hidden_dim
         self.n_dial_encoder_layers = config.n_dial_encoder_layers
-        self.dropout_emb = config.dropout
-        self.dropout_input = config.dropout
-        self.dropout_hidden = config.dropout
-        self.dropout_output = config.dropout
         self.rnn_type = config.rnn_type
-        self.optimizer_type = config.optimizer
-        self.init_lr = config.init_lr
-        self.gradient_clip = config.gradient_clip
-        self.l2_penalty = config.l2_penalty
-        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding
         self.word_embedding_path = config.word_embedding_path
         self.floor_encoder_type = config.floor_encoder
+        # Optional attributes from config
+        self.dropout_emb = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_input = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_hidden = config.dropout if hasattr(config, "dropout") else 0.0
+        self.dropout_output = config.dropout if hasattr(config, "dropout") else 0.0
+        self.use_pretrained_word_embedding = config.use_pretrained_word_embedding if hasattr(config, "use_pretrained_word_embedding") else False
         # Other attributes
         self.word2id = tokenizer.word2id
         self.id2word = tokenizer.id2word
         self.vocab_size = len(tokenizer.word2id)
         self.pad_token_id = tokenizer.pad_token_id
 
-        ## Input components
+        # Input components
         self.word_embedding = nn.Embedding(
             self.vocab_size,
             self.word_embedding_dim,
@@ -61,7 +58,7 @@ class HRE(nn.Module):
             ),
         )
 
-        ## Encoding components
+        # Encoding components
         self.sent_encoder = EncoderRNN(
             input_dim=self.word_embedding_dim,
             hidden_dim=self.sent_encoder_hidden_dim,
@@ -86,13 +83,13 @@ class HRE(nn.Module):
             rnn_type=self.rnn_type,
         )
 
-        ## Classification components
+        # Classification components
         self.output_fc = nn.Linear(
             self.dial_encoder_hidden_dim,
             self.num_labels
         )
 
-        ## Extra components
+        # Extra components
         # floor encoding
         if self.floor_encoder_type == "abs":
             self.floor_encoder = AbsFloorEmbEncoder(
@@ -107,36 +104,8 @@ class HRE(nn.Module):
         else:
             self.floor_encoder = None
 
-        ## Initialization
-        self._set_optimizer()
+        # Initialization
         self._init_weights()
-        self._print_model_stats()
-
-    def _set_optimizer(self):
-        if self.optimizer_type == "adam":
-            self.optimizer = optim.AdamW(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-        elif self.optimizer_type == "sgd":
-            self.optimizer = optim.SGD(
-                self.parameters(),
-                lr=self.init_lr,
-                weight_decay=self.l2_penalty
-            )
-
-    def _print_model_stats(self):
-        total_parameters = 0
-        for name, param in self.named_parameters():
-            # shape is an array of tf.Dimension
-            shape = param.size()
-            variable_parameters = 1
-            for dim in shape:
-                variable_parameters *= dim
-            print("Trainable %s with %d parameters" % (name, variable_parameters))
-            total_parameters += variable_parameters
-        print("Total number of trainable parameters is %d" % total_parameters)
 
     def _init_weights(self):
         init_module_weights(self.output_fc)
@@ -173,11 +142,10 @@ class HRE(nn.Module):
         Arguments:
             model_path {str} -- path to pretrained model weights
         """
-        if DEVICE == "cuda":
-            pretrained_state_dict = torch.load(model_path)
-        else:
-            pretrained_state_dict = torch.load(model_path,
-                                               map_location=lambda storage, loc: storage)
+        pretrained_state_dict = torch.load(
+            model_path,
+            map_location=lambda storage, loc: storage
+        )
         self.load_state_dict(pretrained_state_dict)
 
     def train_step(self, data):
@@ -185,22 +153,22 @@ class HRE(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len+1, max_x_sent_len]} -- token ids of context and target sentences
-                X_floor {LongTensor [batch_size, history_len+1]} -- floors of context and target sentences
-                Y_floor {LongTensor [batch_size]} -- floor of target sentence
-                Y_da {LongTensor [batch_size]} -- dialog acts of target sentence
+                'X' {LongTensor [batch_size, history_len+1, max_x_sent_len]} -- token ids of context and target sentences
+                'X_floor' {LongTensor [batch_size, history_len+1]} -- floors of context and target sentences
+                'Y_floor' {LongTensor [batch_size]} -- floor of target sentence
+                'Y_da' {LongTensor [batch_size]} -- dialog acts of target sentence
 
         Returns:
             dict of data -- returned keys and values
-                loss {FloatTensor []} -- loss tensor to backward
+                'loss' {FloatTensor []} -- loss tensor to backward
             dict of statistics -- returned keys and values
-                loss {float} -- batch loss
+                'loss' {float} -- batch loss
         """
         X = data["X"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
         Y_da = data["Y_da"]
 
-        ## Forward
+        # Forward
         word_encodings, sent_encodings, dial_encodings = self._encode(
             inputs=X,
             input_floors=X_floor,
@@ -208,14 +176,14 @@ class HRE(nn.Module):
         )
         logits = self.output_fc(dial_encodings)
 
-        ## Calculate loss
+        # Calculate loss
         loss = F.cross_entropy(
             logits.view(-1, self.num_labels),
             Y_da.view(-1),
             reduction="mean"
         )
 
-        ## Return dicts
+        # Return dicts
         ret_data = {
             "loss": loss,
         }
@@ -230,23 +198,23 @@ class HRE(nn.Module):
 
         Arguments:
             data {dict of data} -- required keys and values:
-                X {LongTensor [batch_size, history_len+1, max_x_sent_len]} -- token ids of context and target sentences
-                X_floor {LongTensor [batch_size, history_len+1]} -- floors of context and target sentences
-                Y_floor {LongTensor [batch_size]} -- floor of target sentence
-                Y_da {LongTensor [batch_size]} -- dialog acts of target sentence
+                'X' {LongTensor [batch_size, history_len+1, max_x_sent_len]} -- token ids of context and target sentences
+                'X_floor' {LongTensor [batch_size, history_len+1]} -- floors of context and target sentences
+                'Y_floor' {LongTensor [batch_size]} -- floor of target sentence
+                'Y_da' {LongTensor [batch_size]} -- dialog acts of target sentence
 
         Returns:
             dict of outputs -- returned keys and values
                 labels {LongTensor [batch_size]} -- predicted label of target sentence
             dict of statistics -- returned keys and values
-                monitor {float} -- a monitor number for learning rate scheduling
+                'monitor' {float} -- a monitor number for learning rate scheduling
         """
         X = data["X"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
         Y_da = data["Y_da"]
 
         with torch.no_grad():
-            ## Forward
+            # Forward
             word_encodings, sent_encodings, dial_encodings = self._encode(
                 inputs=X,
                 input_floors=X_floor,
@@ -255,7 +223,7 @@ class HRE(nn.Module):
             logits = self.output_fc(dial_encodings)
             _, labels = torch.max(logits, dim=1)
 
-            ## Loss
+            # Loss
             loss = F.cross_entropy(
                 logits.view(-1, self.num_labels),
                 Y_da.view(-1),

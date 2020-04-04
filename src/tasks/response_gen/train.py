@@ -7,8 +7,9 @@ import math
 import argparse
 import os
 
-import torch
 import numpy as np
+import torch
+import torch.optim as optim
 
 from model.response_gen.s2s import S2S
 from model.response_gen.hred import HRED
@@ -16,14 +17,16 @@ from model.response_gen.hred_sep_uttr_enc import HREDSepUttrEnc
 from model.response_gen.vhred import VHRED
 from model.response_gen.vhcr import VHCR
 from model.response_gen.gpt2 import GPT2
-from utils.helpers import metric_is_improving, StatisticsReporter
+from utils.helpers import StatisticsReporter
 from utils.metrics import SentenceMetrics
 from tokenization.whitespace_tokenizer import WhiteSpaceTokenizer
 from tokenization.gpt2_tokenizer import ModGPT2Tokenizer
 from tasks.response_gen.data_source import DataSource
 
+
 def str2bool(v):
     return v.lower() in ('true', '1', "True")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -31,7 +34,7 @@ if __name__ == "__main__":
     # model - architecture
     parser.add_argument("--model", type=str, default="hred", help="[s2s, hred, hred_sep_uttr_enc, vhred, vhcr, gpt2]")
     parser.add_argument("--model_size", type=str, default=None, help="[small, medium], model size for GPT2")
-    parser.add_argument("--rnn_type", type=str, default="lstm", help="[gru, lstm]")
+    parser.add_argument("--rnn_type", type=str, default="gru", help="[gru, lstm]")
     parser.add_argument("--floor_encoder", type=str, default="none", help="floor encoder type in [none, rel, abs]")
     parser.add_argument("--use_attention", type=str2bool, default=False, help="use attention for decoder")
     parser.add_argument("--tie_weights", type=str2bool, default=True, help="tie weights for decoder")
@@ -46,9 +49,10 @@ if __name__ == "__main__":
     parser.add_argument("--n_sent_encoder_layers", type=int, default=2)
     parser.add_argument("--dial_encoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_dial_encoder_layers", type=int, default=2)
-    parser.add_argument("--latent_dim", type=int, default=500)
     parser.add_argument("--decoder_hidden_dim", type=int, default=500)
     parser.add_argument("--n_decoder_layers", type=int, default=2)
+    # -- variational model
+    parser.add_argument("--latent_dim", type=int, default=500)
 
     # training
     parser.add_argument("--seed", type=int, default=42, help="random initialization seed")
@@ -58,12 +62,14 @@ if __name__ == "__main__":
     parser.add_argument("--use_pretrained_word_embedding", type=str2bool, default=True)
     parser.add_argument("--batch_size", type=int, default=30, help="batch size for training")
     parser.add_argument("--eval_batch_size", type=int, default=60, help="batch size for evaluation")
+    # -- variational model
+    parser.add_argument("--n_step_annealing", type=int, default=40000, help="number of steps for KLD annealing in variational models")
 
     # optimizer
     parser.add_argument("--l2_penalty", type=float, default=0.0, help="l2 penalty")
     parser.add_argument("--optimizer", type=str, default="adam", help="optimizer")
-    parser.add_argument("--init_lr", type=float, default=0.001, help="init learning rate")
-    parser.add_argument("--min_lr", type=float, default=1e-7, help="init learning rate")
+    parser.add_argument("--init_lr", type=float, default=1e-3, help="init learning rate")
+    parser.add_argument("--min_lr", type=float, default=1e-7, help="minimum learning rate for early stopping")
     parser.add_argument("--lr_decay_rate", type=float, default=0.5)
     parser.add_argument("--gradient_clip", type=float, default=1.0, help="gradient clipping")
 
@@ -71,7 +77,7 @@ if __name__ == "__main__":
     parser.add_argument("--decode_max_len", type=int, default=40, help="max utterance length for decoding")
     parser.add_argument("--gen_type", type=str, default="greedy", help="[greedy, sample, top]")
     parser.add_argument("--temp", type=float, default=1.0, help="temperature for decoding")
-    parser.add_argument("--top_k", type=float, default=0)
+    parser.add_argument("--top_k", type=int, default=0)
     parser.add_argument("--top_p", type=float, default=0.0)
 
     # management
@@ -82,6 +88,7 @@ if __name__ == "__main__":
     parser.add_argument("--check_loss_after_n_step", type=int, default=100)
     parser.add_argument("--validate_after_n_step", type=int, default=1000)
     parser.add_argument("--sample_after_n_step", type=int, default=1000)
+    parser.add_argument("--filename_note", type=str, help="take a note in saved files' names")
     config = parser.parse_args()
 
     # load corpus config
@@ -93,13 +100,37 @@ if __name__ == "__main__":
         from corpora.personachat.config import Config
     corpus_config = Config(task="response_gen")
 
-    ## merge parse args with corpus config
+    # merge parse args with corpus config
     # priority: parse args > corpus config
     corpus_config_dict = {}
     for k, v in corpus_config.__dict__.items():
         if not k.startswith("__") and k not in config.__dict__:
             corpus_config_dict[k] = v
     config.__dict__.update(corpus_config_dict)
+
+    # define logger
+    MODEL_NAME = config.model
+    if config.use_attention:
+        MODEL_NAME += "_attn"
+    if config.model_size:
+        MODEL_NAME += "_{}".format(config.model_size)
+    LOG_FILE_NAME = "{}.floor_{}.seed_{}.{}".format(
+        MODEL_NAME,
+        config.floor_encoder,
+        config.seed,
+        time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    )
+    if config.filename_note:
+        LOG_FILE_NAME += f".{config.filename_note}"
+
+    def mlog(s):
+        if config.enable_log:
+            if not os.path.exists(f"../log/{config.corpus}/{config.task}"):
+                os.makedirs(f"../log/{config.corpus}/{config.task}")
+
+            with open(f"../log/{config.corpus}/{config.task}/{LOG_FILE_NAME}.log", "a+", encoding="utf-8") as log_f:
+                log_f.write(s+"\n")
+        print(s)
 
     # set random seeds
     torch.manual_seed(config.seed)
@@ -108,29 +139,49 @@ if __name__ == "__main__":
     np.random.seed(config.seed)
 
     # tokenizers
+    special_token_dict = {
+        "speaker1_token": "<speaker1>",
+        "speaker2_token": "<speaker2>"
+    }
     if config.tokenizer == "ws":
-        tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
+        tokenizer = WhiteSpaceTokenizer(
+            word_count_path=config.word_count_path,
+            vocab_size=config.vocab_size,
+            special_token_dict=special_token_dict
+        )
     elif config.tokenizer == "gpt2":
-        tokenizer = ModGPT2Tokenizer()
+        tokenizer = ModGPT2Tokenizer(
+            model_size=config.model_size,
+            special_token_dict=special_token_dict
+        )
 
     # data loaders & number reporters
     trn_reporter = StatisticsReporter()
     dev_reporter = StatisticsReporter()
+    with open(config.dataset_path, encoding="utf-8") as f:
+        dataset = json.load(f)
+    mlog("----- Loading training data -----")
     train_data_source = DataSource(
+        data=dataset["train"],
         config=config,
-        tokenizer=tokenizer,
-        dataset="train"
+        tokenizer=tokenizer
     )
+    mlog(str(train_data_source.statistics))
+    mlog("----- Loading dev data -----")
     dev_data_source = DataSource(
+        data=dataset["dev"],
         config=config,
-        tokenizer=tokenizer,
-        dataset="dev"
+        tokenizer=tokenizer
     )
+    mlog(str(dev_data_source.statistics))
+    mlog("----- Loading test data -----")
     test_data_source = DataSource(
+        data=dataset["test"],
         config=config,
-        tokenizer=tokenizer,
-        dataset="test"
+        tokenizer=tokenizer
     )
+    mlog(str(test_data_source.statistics))
+    del dataset
 
     # metrics calculator
     eval_tokenizer = WhiteSpaceTokenizer(config.word_count_path, config.vocab_size)
@@ -153,42 +204,29 @@ if __name__ == "__main__":
 
     # model adaption
     if torch.cuda.is_available():
-        print("----- Using GPU -----")
+        mlog("----- Using GPU -----")
         model = model.cuda()
     if config.model_path:
         model.load_model(config.model_path)
-        print("----- Model loaded -----")
-        print("model path: {}".format(config.model_path))
-    print(str(model))
+        mlog("----- Model loaded -----")
+        mlog("model path: {}".format(config.model_path))
+
+    # Build optimizer
+    if config.model == "gpt2":
+        config.l2_penalty = 0.01  # follow the GPT2 paper
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=config.init_lr,
+        weight_decay=config.l2_penalty
+    )
 
     # Build lr scheduler
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=model.optimizer,
+        optimizer=optimizer,
         mode="min",
         factor=config.lr_decay_rate,
         patience=2,
     )
-
-    # define logger
-    MODEL_NAME = Model.__name__
-    if config.use_attention:
-        MODEL_NAME += "_attn"
-    if config.model_size:
-        MODEL_NAME += "_{}".format(config.model_size)
-    LOG_FILE_NAME = "{}.floor_{}.seed_{}.{}".format(
-        MODEL_NAME,
-        config.floor_encoder,
-        config.seed,
-        time.strftime("%Y-%m-%d-%H:%M:%S", time.localtime())
-    )
-    def mlog(s):
-        if config.enable_log:
-            if not os.path.exists(f"../log/{config.corpus}/{config.task}"):
-                os.makedirs(f"../log/{config.corpus}/{config.task}")
-
-            with open(f"../log/{config.corpus}/{config.task}/{LOG_FILE_NAME}.log", "a+", encoding="utf-8") as log_f:
-                log_f.write(s+"\n")
-        print(s)
 
     # log hyper parameters
     start_time = time.time()
@@ -228,12 +266,12 @@ if __name__ == "__main__":
                     model.parameters(),
                     config.gradient_clip
                 )
-            model.optimizer.step()
-            model.optimizer.zero_grad()
+            optimizer.step()
+            optimizer.zero_grad()
             trn_reporter.update_data(ret_stat)
 
             # check loss
-            if n_step > 0 and n_step%config.check_loss_after_n_step == 0:
+            if n_step > 0 and n_step % config.check_loss_after_n_step == 0:
                 log_s = f"{time.time()-start_time:.2f}s Epoch {epoch} batch {n_batch} - "
                 log_s += trn_reporter.to_string()
                 mlog(log_s)
@@ -301,7 +339,7 @@ if __name__ == "__main__":
                     mlog(log_s)
 
             # Evaluation on dev dataset
-            if n_step > 0 and n_step%config.validate_after_n_step == 0:
+            if n_step > 0 and n_step % config.validate_after_n_step == 0:
                 model.eval()
 
                 log_s = f"<Dev> learning rate: {lr}\n"
@@ -382,7 +420,7 @@ if __name__ == "__main__":
         hyp_texts = [text for (text, floor) in hyps]
         assert len(ref_texts) == len(hyp_texts)
 
-        ## Evaluation metrics
+        # Evaluation metrics
         # BLEU
         bleu_scores = metrics.batch_bleu(hyp_texts, ref_texts)
         bleu = np.mean(bleu_scores)
