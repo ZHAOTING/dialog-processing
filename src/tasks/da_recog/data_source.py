@@ -22,8 +22,7 @@ class DataSource():
         self.dialog_acts = config.dialog_acts
         # Other attributes
         self.tokenizer = tokenizer
-        self.num_segments = 0
-        self.statistics = {"n_sessions": 0, "n_uttrs": 0, "n_tokens": 0}
+        self.statistics = {"n_sessions": 0, "n_uttrs": 0, "n_tokens": 0, "n_segments": 0}
 
         sessions = data
 
@@ -59,6 +58,7 @@ class DataSource():
 
         # Calculate basic statistics
         self.statistics["n_sessions"] = len(sessions)
+        self.statistics["n_segments"] = len(self._segments)
         for sess in sessions:
             self.statistics["n_uttrs"] += len(sess["utterances"])
             for uttr in sess["utterances"]:

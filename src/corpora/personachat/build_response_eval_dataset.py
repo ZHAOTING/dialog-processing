@@ -89,7 +89,7 @@ def train_dev_test_split(dialogs):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--mturk_data_path", type=str, required=True)
+    parser.add_argument("--amt_result_path", type=str, required=True)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -98,7 +98,7 @@ if __name__ == "__main__":
 
     random.seed(args.seed)
 
-    with open(args.mturk_data_path, encoding="utf-8") as f:
+    with open(args.amt_result_path, encoding="utf-8") as f:
         mturk_data = json.load(f)
 
     print("Extracting dialogs from AMT results...")
@@ -110,4 +110,3 @@ if __name__ == "__main__":
     print("Saving dataset to file...")
     with open(config.dataset_path, "w+", encoding="utf-8") as f:
         json.dump(dataset, f)
-

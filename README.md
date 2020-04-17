@@ -4,10 +4,15 @@ This repository provides a general architecture for NLU and NLG in dialog modeli
 
 | Section |
 |-|
+| [Paper Implementation](#implementation) |
 | [Run a task by commands](#example-commands-to-run-a-task) |
 | [Components](#components) |
 | [How to add new things](#how-to-add-new-corpus/task/model/tokenizer) |
 | [What are supported now](#what-are-supported-now) |
+
+## Paper Implementation
+
+- For the implementation of ACL 2020 paper [*Designing Precise and Robust Dialogue Response Evaluators*, Zhao et al., 2020](https://arxiv.org/abs/2004.04908), kindly check [the task of response evaluation](https://github.com/ZHAOTING/dialog-processing/tree/master/src/tasks/response_eval).
 
 ## Example commands to run a task
 
@@ -155,35 +160,36 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
 
 ### Models
 
-- dialog response generation
-  - seq2seq (`S2S`)
-  - HRED (`HRED`, Serban 2016, [arxiv](https://arxiv.org/abs/1507.04808))
-  - HRED with relative speaker utterance encoders (`HREDSepUttrEnc`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
-  - VHRED (`VHRED`, Serban 2017, [arxiv](https://arxiv.org/abs/1605.06069))
-  - VHCR (`VHCR`, Park 2018, [arxiv](https://arxiv.org/abs/1804.03424))
-  - GPT2 for response generation (`GPT2`, Wolf 2019, [arxiv](https://arxiv.org/abs/1901.08149))
-- dialog response evaluation
-  - ADEM (`ADEM`, Lowe 2017, [arxiv](https://arxiv.org/abs/1708.07149))
-  - RUBER (`RUBER`, Tao 2018, [arxiv](https://arxiv.org/abs/1701.03079))
-  - Roberta-eval (`Roberta`, Zhao 2020, [arxiv](#))
-- dialog act recognition
-  - HRE (`HRE`)
-  - HRE with relative speaker utterance encoders (`HRESepUttrEnc`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
-  - Roberta (`Roberta`, Liu 2019, [arxiv](https://arxiv.org/abs/1907.11692))
-- language modeling
-  - RNNLM (`RNNLM`)
+- dialog response generation (in `model/response_gen/`)
+  - seq2seq (`s2s.py`)
+  - HRED (`hred.py`, Serban 2016, [arxiv](https://arxiv.org/abs/1507.04808))
+  - HRED with relative speaker utterance encoders (`hred_sep_uttr_enc.py`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
+  - VHRED (`vhred.py`, Serban 2017, [arxiv](https://arxiv.org/abs/1605.06069))
+  - VHCR (`vhcr.py`, Park 2018, [arxiv](https://arxiv.org/abs/1804.03424))
+  - GPT2 for response generation (`gpt2.py`, Wolf 2019, [arxiv](https://arxiv.org/abs/1901.08149))
+- dialog response evaluation (in `model/response_eval/`)
+  - ADEM (`adem.py`, Lowe 2017, [arxiv](https://arxiv.org/abs/1708.07149))
+  - RUBER (`ruber.py`, Tao 2018, [arxiv](https://arxiv.org/abs/1701.03079))
+  - Roberta-eval (`roberta.py`, Zhao 2020, [arxiv](https://arxiv.org/abs/2004.04908))
+- dialog act recognition (in `model/da_recog/`)
+  - HRE (`hre.py`)
+  - HRE with relative speaker utterance encoders (`hre_sep_uttr_enc.py`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
+  - Roberta (`roberta.py`, Liu 2019, [arxiv](https://arxiv.org/abs/1907.11692))
+- language modeling (in `model/lm/`)
+  - RNNLM (`rnnlm.py`)
 
 ### Tokenizers
+(in `tokenization/`)
 
-- Whitespace-based tokenizer (`BasicTokenizer`)
-- BERT tokenizer (`ModBertTokenizer`)
-- GPT2 tokenizer (`ModGPT2Tokenizer`)
-- Roberta tokenizer (`ModRobertaTokenizer`)
+- Whitespace-based tokenizer (`whitespace_tokenizer.py`)
+- BERT tokenizer (`bert_tokenizer.py`)
+- GPT2 tokenizer (`gpt2_tokenizer.py`)
+- Roberta tokenizer (`roberta_tokenizer.py`)
 
 ### Metrics
 (in `utils/metrics.py`)
 
-Sentence comparison (a hypothesis against a reference):
+Sentence comparison (class `SentenceMetrics`):
   - BLEU-n
   - multi-ref BLEU-n
   - embedding-based similarity
@@ -196,8 +202,25 @@ Sentence comparison (a hypothesis against a reference):
     - SIF embedding (Arora 2017, [arxiv](https://openreview.net/forum?id=SyK00v5xx); used in Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
   - Distinct-\[1,2\]
 
-Classification:
+Classification (class `ClassificationMetrics`):
   - F1 scores
   - precision scores
   - recall scores
+
+### Statistics
+(in `utils/statistics.py`)
+
+Significance test (class `SignificanceTestMetrics`)
+  - McNemar's test
+
+Inter-annotator agreement (class `InterAnnotatorAgreementMetrics`)
+  - Fleiss' Kappa
+  - Krippendorff's alpha
+
+Correlation (class `CorrelationMetrics`)
+  - Pearson's rho
+  - Spearman's rho
+
+Outlier Detection (class `OutlierDetector`)
+  - MAD method (Leys 2013, [ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668))
 
