@@ -302,7 +302,7 @@ class VHRED(nn.Module):
         Y_out = Y[:, 1:].contiguous()
 
         batch_size = X.size(0)
-        max_y_sent_len = Y_out.size(1)
+        max_y_len = Y_out.size(1)
 
         # Forward
         # Get prior z
@@ -331,14 +331,22 @@ class VHRED(nn.Module):
         # Loss
         loss = 0
         # Reconstruction
-        word_loss = F.cross_entropy(
-            decoder_ret_dict["logits"].view(-1, self.vocab_size),
+        logits = decoder_ret_dict["logits"]
+        word_losses = F.cross_entropy(
+            logits.view(-1, self.vocab_size),
             Y_out.view(-1),
-            ignore_index=self.decoder.pad_token_id,
-            reduction="mean"
-        )
-        ppl = torch.exp(word_loss)
-        loss += word_loss
+            ignore_index=self.pad_token_id,
+            reduction="none"
+        ).view(batch_size, max_y_len)
+        sent_loss = word_losses.sum(1).mean(0)
+        loss += sent_loss
+        with torch.no_grad():
+            ppl = F.cross_entropy(
+                logits.view(-1, self.vocab_size),
+                Y_out.view(-1),
+                ignore_index=self.pad_token_id,
+                reduction="mean"
+            ).exp()
         # KLD
         kld_coef = self._annealing_coef_term(step)
         kld_losses = gaussian_kld(post_mu, post_var, prior_mu, prior_var)
@@ -398,7 +406,6 @@ class VHRED(nn.Module):
         Y_out = Y[:, 1:].contiguous()
 
         batch_size = X.size(0)
-        max_y_sent_len = Y_out.size(1)
 
         with torch.no_grad():
             # Forward

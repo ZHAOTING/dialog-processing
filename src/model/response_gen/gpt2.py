@@ -299,6 +299,8 @@ class GPT2(nn.Module):
         X, Y = data["X"], data["Y"]
         X_floor, Y_floor = data["X_floor"], data["Y_floor"]
 
+        batch_size = Y.size(0)
+
         # construct inputs and outputs
         data_dict = self._construct_input_output(
             inputs=X,
@@ -314,14 +316,21 @@ class GPT2(nn.Module):
 
         # loss
         loss = 0
-        word_loss = F.cross_entropy(
+        word_losses = F.cross_entropy(
             logits.view(-1, self.vocab_size),
             output_labels.view(-1),
             ignore_index=self.pad_token_id,
-            reduction="mean"
-        )
-        ppl = torch.exp(word_loss)
-        loss += word_loss
+            reduction="none"
+        ).view(batch_size, -1)
+        sent_loss = word_losses.sum(1).mean(0)
+        loss += sent_loss
+        with torch.no_grad():
+            ppl = F.cross_entropy(
+                logits.view(-1, self.vocab_size),
+                output_labels.view(-1),
+                ignore_index=self.pad_token_id,
+                reduction="mean"
+            ).exp()
 
         # return dicts
         ret_data = {

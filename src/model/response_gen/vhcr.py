@@ -402,7 +402,7 @@ class VHCR(nn.Module):
         Y_out = Y[:, 1:].contiguous()
 
         batch_size = X.size(0)
-        max_y_sent_len = Y_out.size(1)
+        max_y_len = Y_out.size(1)
         ctx_dial_lens = ((X != self.pad_token_id).sum(-1) > 0).sum(-1)
 
         # Forward
@@ -453,14 +453,22 @@ class VHCR(nn.Module):
         # Loss
         loss = 0
         # Reconstruction
-        word_loss = F.cross_entropy(
-            decoder_ret_dict["logits"].view(-1, self.vocab_size),
+        logits = decoder_ret_dict["logits"]
+        word_losses = F.cross_entropy(
+            logits.view(-1, self.vocab_size),
             Y_out.view(-1),
-            ignore_index=self.decoder.pad_token_id,
-            reduction="mean"
-        )
-        ppl = torch.exp(word_loss)
-        loss += word_loss
+            ignore_index=self.pad_token_id,
+            reduction="none"
+        ).view(batch_size, max_y_len)
+        sent_loss = word_losses.sum(1).mean(0)
+        loss += sent_loss
+        with torch.no_grad():
+            ppl = F.cross_entropy(
+                logits.view(-1, self.vocab_size),
+                Y_out.view(-1),
+                ignore_index=self.pad_token_id,
+                reduction="mean"
+            ).exp()
         # KLD
         kld_coef = self._annealing_coef_term(step)
         dial_kld_losses = gaussian_kld(mu_dial_post, var_dial_post)
@@ -490,7 +498,7 @@ class VHCR(nn.Module):
             data {dict of data} -- required keys and values:
                 'X' {LongTensor [batch_size, history_len, max_x_sent_len]} -- token ids of context sentences
                 'X_floor' {LongTensor [batch_size, history_len]} -- floors of context sentences
-                'Y' {LongTensor [batch_size, max_y_sent_len]} -- token ids of response sentence
+                'Y' {LongTensor [batch_size, max_y_len]} -- token ids of response sentence
                 'Y_floor' {LongTensor [batch_size]} -- floor of response sentence
 
         Returns:
@@ -508,7 +516,7 @@ class VHCR(nn.Module):
         Y_out = Y[:, 1:].contiguous()
 
         batch_size = X.size(0)
-        max_y_sent_len = Y_out.size(1)
+        max_y_len = Y_out.size(1)
         ctx_dial_lens = ((X != self.pad_token_id).sum(-1) > 0).sum(-1)
 
         with torch.no_grad():
