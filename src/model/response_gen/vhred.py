@@ -406,6 +406,7 @@ class VHRED(nn.Module):
         Y_out = Y[:, 1:].contiguous()
 
         batch_size = X.size(0)
+        max_y_len = Y_out.size(1)
 
         with torch.no_grad():
             # Forward
@@ -434,29 +435,32 @@ class VHRED(nn.Module):
 
             # Loss
             # Reconstruction
-            word_loss = F.cross_entropy(
-                decoder_ret_dict["logits"].view(-1, self.vocab_size),
+            logits = decoder_ret_dict["logits"]
+            word_losses = F.cross_entropy(
+                logits.view(-1, self.vocab_size),
+                Y_out.view(-1),
+                ignore_index=self.decoder.pad_token_id,
+                reduction="none"
+            ).view(batch_size, max_y_len)
+            sent_loss = word_losses.sum(1).mean(0)
+            ppl = F.cross_entropy(
+                logits.view(-1, self.vocab_size),
                 Y_out.view(-1),
                 ignore_index=self.decoder.pad_token_id,
                 reduction="mean"
-            )
-            ppl = torch.exp(word_loss)
+            ).exp()
             # KLD
             kld_losses = gaussian_kld(post_mu, post_var, prior_mu, prior_var)
             avg_kld = kld_losses.mean()
-
-        # return statistics
-        ret_statistics = {}
-        ret_statistics["ppl"] = ppl.item()
-        ret_statistics["kld"] = avg_kld.item()
-        ret_statistics["monitor"] = ppl.item()
+            # monitor
+            monitor_loss = sent_loss + avg_kld
 
         # return dicts
         ret_data = {}
         ret_stat = {
             "ppl": ppl.item(),
             "kld": avg_kld.item(),
-            "monitor": ppl.item()
+            "monitor": monitor_loss.item()
         }
 
         return ret_data, ret_stat

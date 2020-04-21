@@ -567,18 +567,27 @@ class VHCR(nn.Module):
 
             # Loss
             # Reconstruction
-            word_loss = F.cross_entropy(
-                decoder_ret_dict["logits"].view(-1, self.vocab_size),
+            logits = decoder_ret_dict["logits"]
+            word_losses = F.cross_entropy(
+                logits.view(-1, self.vocab_size),
+                Y_out.view(-1),
+                ignore_index=self.decoder.pad_token_id,
+                reduction="none"
+            ).view(batch_size, max_y_len)
+            sent_loss = word_losses.sum(1).mean(0)
+            ppl = F.cross_entropy(
+                logits.view(-1, self.vocab_size),
                 Y_out.view(-1),
                 ignore_index=self.decoder.pad_token_id,
                 reduction="mean"
-            )
-            ppl = torch.exp(word_loss)
+            ).exp()
             # KLD
             dial_kld_losses = gaussian_kld(mu_dial_post, var_dial_post)
             avg_dial_kld = dial_kld_losses.mean()
             sent_kld_losses = gaussian_kld(mu_sent_post, var_sent_post, mu_sent_prior, var_sent_prior)
             avg_sent_kld = sent_kld_losses.mean()
+            # monitor loss
+            monitor_loss = sent_loss + avg_dial_kld + avg_sent_kld
 
         # return dicts
         ret_data = {}
@@ -586,7 +595,7 @@ class VHCR(nn.Module):
             "ppl": ppl.item(),
             "dial_kld": avg_dial_kld.item(),
             "sent_kld": avg_sent_kld.item(),
-            "monitor": ppl.item()
+            "monitor": monitor_loss.item()
         }
 
         return ret_data, ret_stat
