@@ -268,13 +268,40 @@ class RelFloorEmbEncoder(nn.Module):
 # Variational modules
 
 class GaussianVariation(nn.Module):
-    def __init__(self, input_dim, z_dim):
+    def __init__(self, input_dim, z_dim, large_mlp=False):
         super(GaussianVariation, self).__init__()
         self.input_dim = input_dim
         self.z_dim = z_dim
-        self.ctx_fc = nn.Linear(input_dim, z_dim)
-        self.ctx2mu = nn.Linear(z_dim, z_dim)
-        self.ctx2var = nn.Linear(z_dim, z_dim)
+        self.ctx_fc = nn.Sequential(
+            nn.Linear(input_dim, z_dim),
+            nn.Tanh()
+        )
+        if large_mlp:
+            self.ctx2mu = nn.Sequential(
+                nn.Linear(z_dim, z_dim),
+                nn.Tanh(),
+                nn.Linear(z_dim, z_dim*5),
+                nn.Tanh(),
+                nn.Linear(z_dim*5, z_dim)
+            )
+            self.ctx2var = nn.Sequential(
+                nn.Linear(z_dim, z_dim),
+                nn.Tanh(),
+                nn.Linear(z_dim, z_dim*5),
+                nn.Tanh(),
+                nn.Linear(z_dim*5, z_dim)
+            )
+        else:
+            self.ctx2mu = nn.Sequential(
+                nn.Linear(z_dim, z_dim),
+                nn.Tanh(),
+                nn.Linear(z_dim, z_dim)
+            )
+            self.ctx2var = nn.Sequential(
+                nn.Linear(z_dim, z_dim),
+                nn.Tanh(),
+                nn.Linear(z_dim, z_dim)
+            )
 
         self.init_weights()
 
@@ -285,7 +312,7 @@ class GaussianVariation(nn.Module):
 
     def forward(self, context):
         batch_size, _ = context.size()
-        context = torch.tanh(self.ctx_fc(context))
+        context = self.ctx_fc(context)
         mu = self.ctx2mu(context)
         var = F.softplus(self.ctx2var(context))
         std = torch.sqrt(var)
@@ -295,18 +322,32 @@ class GaussianVariation(nn.Module):
         return z, mu, var
 
 
-class MixGaussianVariation(nn.Module):
-    def __init__(self, input_dim, z_dim, n_components, var=None):
-        super(MixGaussianVariation, self).__init__()
+class GMMVariation(nn.Module):
+    def __init__(self, input_dim, z_dim, n_components):
+        super(GMMVariation, self).__init__()
         self.input_dim = input_dim
         self.z_dim = z_dim
         self.n_components = n_components
-        self.var = var
 
-        self.ctx_fc = nn.Linear(input_dim, z_dim)
-        self.pi_fc = nn.Linear(z_dim, n_components)
-        self.ctx2mu = nn.Linear(z_dim, z_dim*n_components)
-        self.ctx2var = nn.Linear(z_dim, z_dim*n_components)
+        self.ctx_fc = nn.Sequential(
+            nn.Linear(input_dim, z_dim),
+            nn.Tanh()
+        )
+        self.pi_fc = nn.Sequential(
+            nn.Linear(z_dim, z_dim),
+            nn.Tanh(),
+            nn.Linear(z_dim, n_components)
+        )
+        self.ctx2mu = nn.Sequential(
+            nn.Linear(z_dim, z_dim),
+            nn.Tanh(),
+            nn.Linear(z_dim, z_dim*n_components)
+        )
+        self.ctx2var = nn.Sequential(
+            nn.Linear(z_dim, z_dim),
+            nn.Tanh(),
+            nn.Linear(z_dim, z_dim*n_components)
+        )
 
         self.init_weights()
 
@@ -316,23 +357,15 @@ class MixGaussianVariation(nn.Module):
         init_module_weights(self.ctx2mu)
         init_module_weights(self.ctx2var)
 
-    def forward(self, context, gumbel_temp=0.1, hard_sampling=True, assign_k=None):
+    def forward(self, context, gumbel_temp=0.1):
         batch_size, _ = context.size()
-        context = torch.tanh(self.ctx_fc(context))
+
+        context = self.ctx_fc(context)
         scores = self.pi_fc(context)
-        pi = F.gumbel_softmax(scores, tau=gumbel_temp, hard=hard_sampling, eps=1e-10)
+        pi = F.gumbel_softmax(scores, tau=gumbel_temp, hard=True, eps=1e-10)
         pi = pi.unsqueeze(1)
-        if assign_k is not None:
-            pi = [0.0 for _ in range(self.n_components)]
-            pi[assign_k] = 1.0
-            pi = torch.FloatTensor(pi).view(1, 1, self.n_components).to(DEVICE)
-            pi = pi.repeat(batch_size, 1, 1)
         mu = self.ctx2mu(context)
-        if self.var is None:
-            var = F.softplus(self.ctx2var(context))
-        else:
-            var = torch.FloatTensor([self.var]).to(DEVICE)
-            var = var.unsqueeze(1).expand_as(mu)
+        var = F.softplus(self.ctx2var(context))
         std = torch.sqrt(var)
 
         epsilon = torch.randn([batch_size, self.n_components*self.z_dim]).to(DEVICE)
@@ -340,4 +373,4 @@ class MixGaussianVariation(nn.Module):
         z = torch.bmm(pi, z).squeeze(1)  # [batch_size, z_dim]
         mu = torch.bmm(pi, mu.view(batch_size, self.n_components, self.z_dim)).squeeze(1)
         var = torch.bmm(pi, var.view(batch_size, self.n_components, self.z_dim)).squeeze(1)
-        return z, mu, var, scores
+        return z, mu, var

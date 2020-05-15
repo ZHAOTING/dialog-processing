@@ -2,7 +2,7 @@
 
 This project implements the ACL 2020 paper [*Designing Precise and Robust Dialogue Response Evaluators*, Zhao et al., 2020](https://arxiv.org/abs/2004.04908).
 
-Human annotations used in the paper can be downloaded from [Google Drive](https://drive.google.com/drive/folders/1Y0Gzvxas3lukmTBdAI6cVC4qJ5QM0LBt?usp=sharing).
+Human annotations used in the paper can be downloaded from [Google Drive](https://drive.google.com/drive/folders/1Y0Gzvxas3lukmTBdAI6cVC4qJ5QM0LBt?usp=sharing) or [Zenodo](https://zenodo.org/record/3828180).
 
 ## Reproduction
 Here we use an example to illustrate how to reproduce the main results in the paper.
@@ -14,7 +14,7 @@ python -m corpora.dd.build_response_gen_dataset
 ~~~
 
 ### Preparing supervised data
-* Download Amazon MTurk annotations on the DailyDialog corpus from [Google Drive](https://drive.google.com/drive/folders/1Y0Gzvxas3lukmTBdAI6cVC4qJ5QM0LBt?usp=sharing).
+* Download Amazon MTurk annotations on the DailyDialog corpus from [Google Drive](https://drive.google.com/drive/folders/1Y0Gzvxas3lukmTBdAI6cVC4qJ5QM0LBt?usp=sharing) or [Zenodo](https://zenodo.org/record/3828180).
 
 * Detect and mark outliers.
 ~~~
@@ -38,11 +38,11 @@ CUDA_VISIBLE_DEVICES=0 python -m tasks.response_eval.train_supervised --corpus d
 
 ### Evaluate
 ~~~
-CUDA_VISIBLE_DEVICES=0 python -m tasks.response_eval.apply --corpus dd --model roberta --model_size large --tokenizer roberta --eval_batch_size 30 --model_path {path_to_the_model_trained_supervisedly} --output_model_name roberta_large_supervised
+CUDA_VISIBLE_DEVICES=0 python -m tasks.response_eval.eval --corpus dd --model roberta --model_size large --tokenizer roberta --eval_batch_size 30 --model_path {path_to_the_model_trained_supervisedly} --output_model_name roberta_large_supervised
 ~~~
 
 ### Evaluate the same model on the PersonaChat corpus
-* Download Amazon MTurk annotations on the PersonaChat corpus from [Google Drive](https://drive.google.com/drive/folders/1Y0Gzvxas3lukmTBdAI6cVC4qJ5QM0LBt?usp=sharing).
+* Download Amazon MTurk annotations on the PersonaChat corpus from [Google Drive](https://drive.google.com/drive/folders/1Y0Gzvxas3lukmTBdAI6cVC4qJ5QM0LBt?usp=sharing) or [Zenodo](https://zenodo.org/record/3828180).
 
 * Detect and mark outliers.
 ~~~
@@ -56,5 +56,15 @@ python -m corpora.personachat.build_response_eval_dataset --amt_result_path {pat
 
 * Evaluate the model trained as above.
 ~~~
-CUDA_VISIBLE_DEVICES=0 python -m tasks.response_eval.apply --corpus personachat --model roberta --model_size large --tokenizer roberta --eval_batch_size 30 --model_path {path_to_the_model_trained_supervisedly} --output_model_name roberta_large_supervised
+CUDA_VISIBLE_DEVICES=0 python -m tasks.response_eval.eval --corpus personachat --model roberta --model_size large --tokenizer roberta --eval_batch_size 30 --model_path {path_to_the_model_trained_supervisedly} --output_model_name roberta_large_supervised
 ~~~
+
+## Apply RoBERTa-eval to scoring arbitrary dialogues
+* Obtain a trained RoBERTa-eval model following instructions above or from [Zenodo)](https://zenodo.org/record/3828286).
+
+* Run example script.
+~~~
+python -m tasks.response_eval.apply_roberta_eval --model_path {path_to_the_trained_model}
+~~~
+
+* Adjust the example code and test on your own data :)

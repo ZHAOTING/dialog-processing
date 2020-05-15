@@ -196,7 +196,7 @@ if __name__ == "__main__":
     ctxs = []
     hyps = []
     refs = []
-    for _ in tqdm(range(len(test_data_source)//config.eval_batch_size+1)):
+    for _ in tqdm(range(math.ceil(len(test_data_source)/config.eval_batch_size))):
         batch_data = test_data_source.next(config.eval_batch_size)
         if batch_data is None:
             break

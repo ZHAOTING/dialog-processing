@@ -482,3 +482,81 @@ class Roberta(nn.Module):
         ret_stat = {}
 
         return ret_data, ret_stat
+
+    def predict(self, batch_ctx, batch_hyp):
+        """Predict a batch of data
+
+        Arguments:
+            batch_ctx {list batch_size*[history_len*(text, floor)]} -- context utterances and floors
+            batch_hyp {list batch_size*[(text, floor)]} -- response utterances and floors
+
+        Returns:
+            list of scores {list of int [batch_size]} - scores of input (context, hypothesis) pairs (score scale: 1-5)
+
+        Example:
+            inputs:
+                batch_ctx - [
+                    [
+                        ["hello there .", "A"],
+                        ["hi .", "B"],
+                    ],
+                    [
+                        ["it has been a terrible year .", "B"],
+                        ["any plan after graduation ?", "A"],
+                    ],
+                    [
+                        ["hi, how much is the guitar ?", "A"],
+                        ["it only takes five thousand bucks .", "B"],
+                        ["that is a lot !", "A"]
+                    ]
+                ]
+
+                batch_hyp - [
+                    ["how is it going ?", "A"],
+                    ["not really .", "B"],
+                    ["that is funny .", "B"]
+                ]
+
+            outputs:
+                scores - [
+                    4.38,
+                    4.56,
+                    2.64
+                ]
+        """
+        input_token_id_seqs = []
+        for ctx, hyp in zip(batch_ctx, batch_hyp):
+            hyp_text, hyp_floor = hyp
+            assert hyp_floor in ["A", "B"]
+
+            ctx_input_ids = []
+            for text, floor in ctx:
+                assert floor in ["A", "B"]
+                tokens = self.tokenizer.convert_string_to_tokens(text)
+                token_ids = self.tokenizer.convert_tokens_to_ids(tokens, bos_and_eos=True)
+                speaker_token_id = self.speaker1_token_id if floor == hyp_floor else self.speaker2_token_id
+                ctx_input_ids += ([speaker_token_id] + token_ids)
+
+            tokens = self.tokenizer.convert_string_to_tokens(hyp_text)
+            token_ids = self.tokenizer.convert_tokens_to_ids(tokens, bos_and_eos=True)
+            response_input_ids = [self.speaker1_token_id] + token_ids
+
+            input_id_seq = [self.cls_token_id] + ctx_input_ids + [self.sep_token_id] + [self.sep_token_id] + response_input_ids + [self.sep_token_id]
+            input_token_id_seqs.append(input_id_seq)
+
+        # Get lengths
+        seq_lens = [len(seq) for seq in input_token_id_seqs]
+        max_seq_len = max(seq_lens)
+
+        # Get attention masks
+        attention_masks = [[1]*len(seq) + [0]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
+
+        # Pad sequences and produce tensors
+        input_token_id_seqs = [seq + [self.pad_token_id]*(max_seq_len-len(seq)) for seq in input_token_id_seqs]
+        input_token_id_seqs = torch.LongTensor(input_token_id_seqs).to(DEVICE)
+        attention_masks = torch.LongTensor(attention_masks).to(DEVICE)
+
+        with torch.no_grad():
+            scores = self._compute_scores(input_token_id_seqs, attention_masks)
+
+        return scores.tolist()
