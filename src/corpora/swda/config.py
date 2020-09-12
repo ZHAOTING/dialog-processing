@@ -1,6 +1,7 @@
 class Config(object):
     def __init__(self, task):
         self.dialog_acts = ['sd', 'b', 'sv', '%', 'aa', 'ba', 'qy', 'ny', 'fc', 'qw', 'nn', 'bk', 'fo_o_fw_"_by_bc', 'h', 'qy^d', 'bh', '^q', 'bf', 'na', 'ad', '^2', 'b^m', 'qo', 'qh', '^h', 'ar', 'ng', 'br', 'no', 'fp', 'qrr', 'arp_nd', 't3', 'oo_co_cc', 't1', 'bd', 'aap_am', '^g', 'qw^d', 'fa', 'ft']
+        self.joint_da_seg_recog_labels = ["I"] + ["E_"+da for da in self.dialog_acts]
 
         # Data processing
         self.download_url = "http://compprag.christopherpotts.net/code-data/swda.zip"

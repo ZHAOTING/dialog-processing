@@ -15,6 +15,7 @@ import spacy
 from .config import Config
 from utils.helpers import standardize_english_text
 
+
 config = Config(task="response_gen")
 raw_data_dir = config.raw_data_dir
 zipfile_path = f"{config.raw_data_dir}/dailydialog.zip"
@@ -131,6 +132,37 @@ def train_dev_test_split_by_topic(sessions):
     return dataset
 
 
+nlp = spacy.load('en_core_web_sm')
+def build_session(dialog):
+    uttrs, dialog_acts, emotions, topic = dialog
+    session = {
+        "utterances": [],
+        "dialog_meta": {
+            "topic": config.id2topic[int(topic)]
+        }
+    }
+    speaker_idx = 0
+    for uttr_text, dialog_act, emotion in zip(uttrs, dialog_acts, emotions):
+        dialog_act = config.id2dialog_act[int(dialog_act)]
+        emotion = config.id2emotion[int(emotion)]
+        floor = ["A", "B"][speaker_idx]
+        speaker_idx = 1 - speaker_idx
+
+        def tokenize(string):
+            return [token.text for token in nlp(clean_dd_text(string))]
+        uttr_tokens = tokenize(uttr_text)
+        tokenized_uttr_text = " ".join(uttr_tokens)
+        uttr = {
+            "floor": floor,
+            "text": tokenized_uttr_text,
+            "utterance_meta": {
+                "emotion": emotion,
+                "dialog_act": dialog_act,
+            }
+        }
+        session["utterances"].append(uttr)
+    return session
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_workers", type=int, default=os.cpu_count())
@@ -153,44 +185,13 @@ if __name__ == "__main__":
         emotion_filepath=f"{extracted_dir}/dialogues_emotion.txt"
     )
     dialogs = aggregate_valid_conversations(
-        _dialog_uttrs=dialogs, 
-        _dialog_das=dialog_das, 
-        _dialog_emotions=dialog_emotions, 
+        _dialog_uttrs=dialogs,
+        _dialog_das=dialog_das,
+        _dialog_emotions=dialog_emotions,
         _dialog_topics=dialog_topics
     )
 
     print("Building sessions...")
-    nlp = spacy.load('en_core_web_sm')
-    
-    def build_session(dialog):
-        uttrs, dialog_acts, emotions, topic = dialog
-        session = {
-            "utterances": [],
-            "dialog_meta": {
-                "topic": config.id2topic[int(topic)]
-            }
-        }
-        speaker_idx = 0
-        for uttr_text, dialog_act, emotion in zip(uttrs, dialog_acts, emotions):
-            dialog_act = config.id2dialog_act[int(dialog_act)]
-            emotion = config.id2emotion[int(emotion)]
-            floor = ["A", "B"][speaker_idx]
-            speaker_idx = 1 - speaker_idx
-
-            def tokenize(string):
-                return [token.text for token in nlp(clean_dd_text(string))]
-            uttr_tokens = tokenize(uttr_text)
-            tokenized_uttr_text = " ".join(uttr_tokens)
-            uttr = {
-                "floor": floor,
-                "text": tokenized_uttr_text,
-                "utterance_meta": {
-                    "emotion": emotion,
-                    "dialog_act": dialog_act,
-                }
-            }
-            session["utterances"].append(uttr)
-        return session
     with Pool(args.n_workers) as pool:
         sessions = list(
             tqdm(
@@ -201,6 +202,17 @@ if __name__ == "__main__":
 
     print("Building dataset split...")
     dataset = train_dev_test_split_by_topic(sessions)
+
+    print("Assigning id...")
+    sess_id = 0
+    sent_id = 0
+    for stage in ["train", "dev", "test"]:
+        for sess in dataset[stage]:
+            sess["dialog_meta"]["session_id"] = sess_id
+            sess_id += 1
+            for uttr in sess["utterances"]:
+                uttr["utterance_meta"]["sentence_id"] = str(sent_id)
+                sent_id += 1
 
     print(f"Writing dataset json file to {config.dataset_path}...")
     with open(config.dataset_path, "w+", encoding="utf-8") as f:
@@ -217,4 +229,4 @@ if __name__ == "__main__":
     with open(config.word_count_path, "w+") as f:
         for word, count in ordered_word_count:
             f.write("{}\t{}\n".format(word, count))
-    
+

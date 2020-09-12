@@ -14,6 +14,8 @@ This repository provides a general architecture for NLU and NLG in dialog modeli
 
 - For the implementation of ACL 2020 paper [*Designing Precise and Robust Dialogue Response Evaluators*, Zhao et al., 2020](https://arxiv.org/abs/2004.04908), kindly check [the task of response evaluation](https://github.com/ZHAOTING/dialog-processing/tree/master/src/tasks/response_eval).
 
+- For the *NON-ORGINAL* implementation of CSL 2019 journal paper [*Joint dialog act segmentation and recognition in human conversations using attention to dialog context*, Zhao and Kawahara, 2020](https://www.sciencedirect.com/science/article/abs/pii/S0885230818304030), kindly check [the task of joint DA segmentation and recognition](https://github.com/ZHAOTING/dialog-processing/tree/master/src/tasks/joint_da_seg_recog).
+
 ## Example commands to run a task
 
 (at directory dialog_processing/src/)

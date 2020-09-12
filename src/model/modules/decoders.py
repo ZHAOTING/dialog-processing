@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.modules.submodules import Attention, DynamicRNN, LockedDropout
+from model.modules.submodules import Attention, LockedDropout
 from model.modules.utils import init_module_weights, init_rnn_hidden_states, embedded_dropout
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -143,25 +143,15 @@ class DecoderRNN(nn.Module):
         self.lockdrop = LockedDropout()
 
         # initialization
-        self.init_weights()
+        self._init_weights()
 
-    def init_weights(self):
+    def _init_weights(self):
         if self.feat_dim > 0:
             init_module_weights(self.feat_fc, 0.1)
         init_module_weights(self.rnn)
         init_module_weights(self.project_fc, 0.1)
         if not self.tie_weights:
             init_module_weights(self.word_classifier, 0.1)
-
-    def init_hidden_states(self, batch_size, init_type):
-        return init_rnn_hidden_states(
-            batch_size=batch_size,
-            hidden_dim=self.hidden_dim,
-            n_layers=self.n_layers,
-            bidirectional=False,
-            rnn_type=self.rnn_type,
-            init_type=init_type
-        )
 
     def _step(self, inputs, hiddens, feats=None, attn_ctx=None, attn_mask=None):
 
@@ -282,6 +272,11 @@ class DecoderRNN(nn.Module):
             ret_dict["attns"] = step_ret_dict["attns"]
         # manual unrolling in free running mode
         elif mode == DecoderRNN.MODE_FREE_RUN:
+            if feats is None:
+                n_unrolling_steps = self.max_len
+            else:
+                n_unrolling_steps = feats.size(1)
+
             # bos input for the first step
             bos_input = torch.LongTensor([self.bos_token_id]).to(DEVICE)
             bos_input.requires_grad_(False)
@@ -332,7 +327,7 @@ class DecoderRNN(nn.Module):
                 step_symbol_lst = []
 
             # unrolling
-            for step_idx in range(self.max_len):
+            for step_idx in range(n_unrolling_steps):
                 # some inputs to the current step
                 if feats is None:
                     step_feat = None
@@ -370,7 +365,7 @@ class DecoderRNN(nn.Module):
 
                     # get topk outputs from candidates and update total scores
                     cur_scores = cur_scores.view(batch_size*top_k, 1)
-                    
+
                     if gen_type == DecoderRNN.GEN_BEAM_MMI_ANTI_LM:
                         # code.interact(local=locals())
                         step_symbol_lst = step_symbols.tolist()
@@ -402,7 +397,7 @@ class DecoderRNN(nn.Module):
                                 pred = cand_idx//top_k + batch_idx*top_k
                                 new_cur_scores.append(cur_scores[pred] + step_scores_flat[batch_idx][cand_idx])
                         cur_scores = torch.FloatTensor(new_cur_scores).to(DEVICE)  # [batch_size*top_k]
-                        
+
                     else:
                         # -- length penalty
                         new_score_candidates = (cur_scores*(step_idx+1) + step_scores)/(step_idx+2)  # [batch_size*top_k, top_k]
@@ -488,3 +483,15 @@ class DecoderRNN(nn.Module):
 
         return ret_dict
 
+    def init_hidden_states(self, batch_size, init_type):
+        return init_rnn_hidden_states(
+            batch_size=batch_size,
+            hidden_dim=self.hidden_dim,
+            n_layers=self.n_layers,
+            bidirectional=False,
+            rnn_type=self.rnn_type,
+            init_type=init_type
+        )
+
+    def tie_weights(self):
+        self.word_classifier.weight = self.embedding.weight

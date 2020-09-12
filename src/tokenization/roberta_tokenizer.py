@@ -59,6 +59,10 @@ class ModRobertaTokenizer(object):
         ids = self.pretrained.convert_tokens_to_ids(tokens)
         if len(ids) == 0:
             return ids
+        if bos_and_eos:
+            ids = [self.bos_token_id] + ids + [self.eos_token_id]
+        elif add_eos:
+            ids = ids + [self.eos_token_id]
         return ids
 
     def convert_ids_to_tokens(self, ids, trim_pad=False, **kwargs):

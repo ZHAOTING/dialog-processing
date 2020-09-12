@@ -110,6 +110,15 @@ def train_dev_test_split_by_conversation(conversations, split_ratio=[0.8, 0.1, 0
     return train, dev, test
 
 
+nlp = spacy.load('en_core_web_sm')
+def tokenize_conversation(conv):
+    def tokenize(string):
+        return [token.text for token in nlp(clean_cornellmovie_text(string))]
+    for line in conv["lines"]:
+        line["tokens"] = tokenize(line['text'])
+    return conv
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_workers", type=int, default=os.cpu_count())
@@ -137,15 +146,6 @@ if __name__ == '__main__':
     print(f'Train set: {len(train)} conversations')
     print(f'Validation set: {len(dev)} conversations')
     print(f'Test set: {len(test)} conversations')
-
-    nlp = spacy.load('en_core_web_sm')
-    
-    def tokenize_conversation(conv):
-        def tokenize(string):
-            return [token.text for token in nlp(clean_cornellmovie_text(string))]
-        for line in conv["lines"]:
-            line["tokens"] = tokenize(line['text'])
-        return conv
 
     print("Building dataset json file...")
     dataset = {"train": [], "dev": [], "test": []}

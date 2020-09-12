@@ -17,18 +17,22 @@ from .swda_reader.swda import Transcript
 from .dataset_split import train_set_idx, dev_set_idx, test_set_idx
 from utils.helpers import standardize_english_text
 
-config = Config(task="da_recog")
+config = Config(task="joint_da_seg_recog")
 raw_data_dir = config.raw_data_dir
 zipfile_path = f"{config.raw_data_dir}/swda.zip"
 extracted_dir = f"{config.raw_data_dir}/swda"
 
 
 def clean_swda_text(text):
-    text = re.sub(r"\{\w (.*?)\}", r"\1", text)
-    text = re.sub(r"\{\w (.*?)\ --", r"\1", text)
-    text = re.sub(r"\*\[\[.*?\]\]", "", text)
-    text = standardize_english_text(text)
-    return text
+    text = text.lower()
+    text = re.sub(r"({\w*) ", "", text)
+    text = re.sub(r"[\[\]\}\(\)\+\<\>]", "", text)
+    text = re.sub(r"[,\.\!\?]", "", text)
+    text = re.sub(" - /", "", text)
+    text = re.sub(" ?-? ?/", "", text)
+    text = re.sub(r"\<*laughter\>*", "llaughterr", text)
+    text = re.sub(r" +", " ", text)
+    return text.strip()
 
 
 def download_data():
@@ -53,7 +57,7 @@ def build_session(filepath):
     prompt = trans.prompt.lower()
 
     # adapt utterances with "+" dialog act
-    uttrs = []
+    segments = []
     last_idx = {"A": -1, "B": -1}
     for uttr in trans.utterances:
         text = clean_swda_text(uttr.text)
@@ -66,22 +70,37 @@ def build_session(filepath):
             continue
         elif da == "+":
             if last_idx[speaker] > -1:
-                uttrs[last_idx[speaker]]["text"] += f" {text}"
+                segments[last_idx[speaker]]["text"] += f" {text}"
             else:
                 continue
         else:
-            uttr = {
+            segment = {
                 "floor": speaker,
                 "text": text,
-                "utterance_meta": {
+                "segment_meta": {
                     "dialog_act": da
                 }
             }
-            uttrs.append(uttr)
-            last_idx[speaker] = len(uttrs)-1
+            segments.append(segment)
+            last_idx[speaker] = len(segments)-1
 
         if da == "" or text.strip() == "":
             code.interact(local=locals())
+
+    # get utterances from segments
+    uttrs = []
+    uttr = []
+    last_speaker = ""
+    for segment in segments:
+        speaker = segment["floor"]
+        if speaker == last_speaker:
+            uttr.append(segment)
+        else:
+            if len(uttr) > 0:
+                uttrs.append(uttr)
+            uttr = [segment]
+            last_speaker = speaker
+    uttrs.append(uttr)
 
     session = {
         "utterances": uttrs,
@@ -115,7 +134,8 @@ def process_session(session):
     def tokenize(string):
         return [token.text for token in nlp(standardize_english_text(string))]
     for uttr in session["utterances"]:
-        uttr["text"] = " ".join(tokenize(uttr["text"]))
+        for segment in uttr:
+            segment["text"] = " ".join(tokenize(segment["text"]))
 
 
 if __name__ == "__main__":
@@ -155,8 +175,9 @@ if __name__ == "__main__":
     da_dict = collections.defaultdict(int)
     for sess in dataset["train"]:
         for uttr in sess["utterances"]:
-            da = uttr["utterance_meta"]["dialog_act"]
-            da_dict[da] += 1
+            for segment in uttr:
+                da = segment["segment_meta"]["dialog_act"]
+                da_dict[da] += 1
     sorted_da_list = sorted(da_dict.items(), key=lambda x: x[1], reverse=True)
     print(len(sorted_da_list))
     print([k for k, v in sorted_da_list])
@@ -179,8 +200,9 @@ if __name__ == "__main__":
     word_count = collections.defaultdict(int)
     for sess in dataset["train"]:
         for uttr in sess["utterances"]:
-            for token in uttr["text"].split(" "):
-                word_count[token] += 1
+            for segment in uttr:
+                for token in segment["text"].split(" "):
+                    word_count[token] += 1
     ordered_word_count = sorted(word_count.items(), key=lambda x: x[1], reverse=True)
     with open(config.word_count_path, "w+") as f:
         for word, count in ordered_word_count:
