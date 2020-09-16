@@ -12,6 +12,8 @@ This repository provides a general architecture for NLU and NLG in dialog modeli
 
 ## Paper Implementation
 
+- The implementation of arxiv paper [*Multi-Referenced Training for Dialogue Response Generation*, Zhao and Kawahara, 2020](https://arxiv.org/abs/2009.07117) will be released soon.
+
 - For the implementation of ACL 2020 paper [*Designing Precise and Robust Dialogue Response Evaluators*, Zhao et al., 2020](https://arxiv.org/abs/2004.04908), kindly check [the task of response evaluation](https://github.com/ZHAOTING/dialog-processing/tree/master/src/tasks/response_eval).
 
 - For the *NON-ORGINAL* implementation of CSL 2019 journal paper [*Joint dialog act segmentation and recognition in human conversations using attention to dialog context*, Zhao and Kawahara, 2020](https://www.sciencedirect.com/science/article/abs/pii/S0885230818304030), kindly check [the task of joint DA segmentation and recognition](https://github.com/ZHAOTING/dialog-processing/tree/master/src/tasks/joint_da_seg_recog).
@@ -155,13 +157,16 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
 
 ### Tasks
 
-- dialog response generation (`response_gen`)
-- dialog response evaluation (`response_eval`) (to be released)
-- dialog act recognition (`da_recog`)
 - language modeling (`lm`)
+- dialog response generation (`response_gen`)
+- dialog response evaluation (`response_eval`)
+- dialog act recognition (`da_recog`)
+- joint dialog act segmentation and recognition (`joint_da_seg_recog`)
 
 ### Models
 
+- language modeling (in `model/lm/`)
+  - RNNLM (`rnnlm.py`)
 - dialog response generation (in `model/response_gen/`)
   - seq2seq (`s2s.py`)
   - HRED (`hred.py`, Serban 2016, [arxiv](https://arxiv.org/abs/1507.04808))
@@ -174,11 +179,12 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
   - RUBER (`ruber.py`, Tao 2018, [arxiv](https://arxiv.org/abs/1701.03079))
   - Roberta-eval (`roberta.py`, Zhao 2020, [arxiv](https://arxiv.org/abs/2004.04908))
 - dialog act recognition (in `model/da_recog/`)
-  - HRE (`hre.py`)
+  - Hierarchical recurrent encoder (HRE) (`hre.py`)
   - HRE with relative speaker utterance encoders (`hre_sep_uttr_enc.py`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
   - Roberta (`roberta.py`, Liu 2019, [arxiv](https://arxiv.org/abs/1907.11692))
-- language modeling (in `model/lm/`)
-  - RNNLM (`rnnlm.py`)
+- joint dialog act segmentation and recognition (in `model/joint_da_seg_recog/`)
+  - Encoder-decoder sequence labeler (`ed.py`, Zhao 2020, [CSL page](https://www.sciencedirect.com/science/article/abs/pii/S0885230818304030))
+  - Encoder-decoder sequence labeler with contextual attentions (`attn_ed.py`, Zhao 2020, [CSL page](https://www.sciencedirect.com/science/article/abs/pii/S0885230818304030))
 
 ### Tokenizers
 (in `tokenization/`)
@@ -208,6 +214,14 @@ Classification (class `ClassificationMetrics`):
   - F1 scores
   - precision scores
   - recall scores
+
+Dialog act segmentation and recognition (class `DAMetrics`):
+  - DSER
+  - Strict segmentation error rate
+  - DER
+  - Strict joint error rate
+  - Macro F1
+  - Micro F1
 
 ### Statistics
 (in `utils/statistics.py`)
