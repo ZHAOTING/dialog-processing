@@ -267,6 +267,8 @@ class RelFloorEmbEncoder(nn.Module):
 
 # Variational modules
 
+# Variational modules
+
 class GaussianVariation(nn.Module):
     def __init__(self, input_dim, z_dim, large_mlp=False):
         super(GaussianVariation, self).__init__()
@@ -374,3 +376,65 @@ class GMMVariation(nn.Module):
         mu = torch.bmm(pi, mu.view(batch_size, self.n_components, self.z_dim)).squeeze(1)
         var = torch.bmm(pi, var.view(batch_size, self.n_components, self.z_dim)).squeeze(1)
         return z, mu, var
+
+
+class LGMVariation(nn.Module):
+    def __init__(self, input_dim, z_dim, n_components):
+        super(LGMVariation, self).__init__()
+        self.input_dim = input_dim
+        self.z_dim = z_dim
+        self.n_components = n_components
+
+        self.ctx_fc = nn.Sequential(
+            nn.Linear(input_dim, z_dim),
+            nn.Tanh()
+        )
+        self.pi_fc = nn.Sequential(
+            nn.Linear(z_dim, z_dim),
+            nn.Tanh(),
+            nn.Linear(z_dim, n_components)
+        )
+        self.ctx2mu = nn.Sequential(
+            nn.Linear(z_dim, z_dim),
+            nn.Tanh(),
+            nn.Linear(z_dim, z_dim*n_components)
+        )
+        self.ctx2var = nn.Sequential(
+            nn.Linear(z_dim, z_dim),
+            nn.Tanh(),
+            nn.Linear(z_dim, z_dim*n_components)
+        )
+
+        self.init_weights()
+
+    def init_weights(self):
+        init_module_weights(self.ctx_fc)
+        init_module_weights(self.pi_fc)
+        init_module_weights(self.ctx2mu)
+        init_module_weights(self.ctx2var)
+
+    def forward(self, context, gumbel_temp=0.1, assign_k=None, return_pi=False):
+        batch_size, _ = context.size()
+
+        context = self.ctx_fc(context)
+        scores = self.pi_fc(context)
+        if assign_k is None:
+            pi = scores.softmax(1)  # [batch_size, n_components]
+        else:
+            pi = torch.zeros(batch_size, self.n_components).to(DEVICE)
+            pi.data[:, assign_k].fill_(1.0)
+        mu = self.ctx2mu(context)
+        var = F.softplus(self.ctx2var(context))
+        std = torch.sqrt(var)
+
+        epsilon = torch.randn([batch_size, self.n_components*self.z_dim]).to(DEVICE)
+        z = (epsilon * std + mu).view(batch_size, self.n_components, self.z_dim)
+        z = torch.bmm(pi.unsqueeze(1), z).squeeze(1)  # [batch_size, z_dim]
+        mu = mu.view(batch_size, self.n_components, self.z_dim)  # [batch_size, n_components, z_dim]
+        var = var.view(batch_size, self.n_components, self.z_dim)  # [batch_size, n_components, z_dim]
+        mu = torch.bmm(pi.unsqueeze(1), mu).squeeze(1)  # [batch_size, z_dim]
+        var = torch.bmm(pi.unsqueeze(1), var).squeeze(1)  # [batch_size, z_dim]
+        if return_pi:
+            return z, mu, var, pi
+        else:
+            return z, mu, var

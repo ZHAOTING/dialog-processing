@@ -12,7 +12,7 @@ This repository provides a general architecture for NLU and NLG in dialog modeli
 
 ## Paper Implementation
 
-- The implementation of arxiv paper [*Multi-Referenced Training for Dialogue Response Generation*, Zhao and Kawahara, 2020](https://arxiv.org/abs/2009.07117) will be released soon.
+- The implementation of arxiv paper [*Multi-Referenced Training for Dialogue Response Generation*, Zhao and Kawahara, 2020](https://arxiv.org/abs/2009.07117), kindly check [the task of multi-referenced response evaluation](https://github.com/ZHAOTING/dialog-processing/tree/master/src/tasks/response_gen_multi_response).
 
 - For the implementation of ACL 2020 paper [*Designing Precise and Robust Dialogue Response Evaluators*, Zhao et al., 2020](https://arxiv.org/abs/2004.04908), kindly check [the task of response evaluation](https://github.com/ZHAOTING/dialog-processing/tree/master/src/tasks/response_eval).
 
@@ -159,6 +159,7 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
 
 - language modeling (`lm`)
 - dialog response generation (`response_gen`)
+- multi-referenced dialog response generation (`response_gen_multi_response`)
 - dialog response evaluation (`response_eval`)
 - dialog act recognition (`da_recog`)
 - joint dialog act segmentation and recognition (`joint_da_seg_recog`)
@@ -173,6 +174,16 @@ A new tokenizer should be added in `tokenization/`. Be sure to provide the same 
   - HRED with relative speaker utterance encoders (`hred_sep_uttr_enc.py`, Zhao 2019, [arxiv](https://arxiv.org/abs/1907.05599))
   - VHRED (`vhred.py`, Serban 2017, [arxiv](https://arxiv.org/abs/1605.06069))
   - VHCR (`vhcr.py`, Park 2018, [arxiv](https://arxiv.org/abs/1804.03424))
+  - GPT2 for response generation (`gpt2.py`, Wolf 2019, [arxiv](https://arxiv.org/abs/1901.08149))
+- multi-referenced dialog response generation (in `model/response_gen_multi_response/`)
+  - HRED (`hred.py`)
+  - VHRED (`vhred.py`)
+  - VHRED with Gaussian mixture model prior (`vhred.py`)
+  - VHRED with linear Gaussian model prior (`vhred.py`, Zhao 2020, [arxiv](https://arxiv.org/abs/2009.07117))
+  - Mechanism-aware HRED (`mhred.py`, Zhou 2017, [AAAI](https://aaai.org/ocs/index.php/AAAI/AAAI17/paper/viewPDFInterstitial/14471/14267)) 
+  - HRED_CVaR (`hred_cvar.py`, Zhang 2018, [aclweb](https://www.aclweb.org/anthology/P18-1137/))
+  - VHRED_multi (`vhred_multi_avg.py`, Qiu 2019, [aclweb](https://www.aclweb.org/anthology/P19-1372/))
+  - HRED with knwoledge distillation (`hred_student`)
   - GPT2 for response generation (`gpt2.py`, Wolf 2019, [arxiv](https://arxiv.org/abs/1901.08149))
 - dialog response evaluation (in `model/response_eval/`)
   - ADEM (`adem.py`, Lowe 2017, [arxiv](https://arxiv.org/abs/1708.07149))
