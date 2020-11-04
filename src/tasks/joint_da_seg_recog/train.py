@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--rnn_type", type=str, default="gru", help="[gru, lstm]")
     parser.add_argument("--tokenizer", type=str, default="ws", help="[ws]")
     parser.add_argument("--tie_weights", type=str2bool, default=True, help="tie weights for decoder")
-    parser.add_argument("--attention_type", type=str, default="word", help="[word, sent]")
+    parser.add_argument("--attention_type", type=str, default="sent", help="[word, sent]")
 
     # model - numbers
     parser.add_argument("--vocab_size", type=int, default=10000)
