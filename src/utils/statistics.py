@@ -215,3 +215,34 @@ class CorrelationMetrics:
     def spearman_cor(self, data1, data2=None):
         rho, p = stats.spearmanr(data1, data2)
         return rho, p
+
+
+if __name__ == "__main__":
+    print("== Filter out outliers ==")
+    outlier_detector = OutlierDetector()
+    data = [1, 2, 1, 5]
+    outlier = outlier_detector.detect_by_abd_median(data, n_dev=1)
+    filtered_data = list(filter(lambda x: x not in outlier, data))
+    print("before filtering:", data)
+    print("after filtering:", filtered_data)
+
+    print("== Calculate Krippendorff's alpha ==")
+    metrics = InterAnnotatorAgreementMetrics()
+    data = [
+        {
+            "hit_id1_score": 0,
+            "hit_id3_score": 5
+        }, # worker_id1
+        {
+            "hit_id1_score": 1,
+            "hit_id2_score": 2,
+            "hit_id3_score": 5
+        }, # worker_id2
+        {
+            "hit_id2_score": 2
+        }  # worker_id3
+    ]
+    alpha = metrics.krippendorff_alpha(data, metric_type="interval")
+    print("Krippendorff's alpha:", alpha)
+
+
