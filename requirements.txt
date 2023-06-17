@@ -3,7 +3,7 @@ torch
 tqdm
 spacy
 gensim
-transformers==3.0.2
+transformers
 ftfy
 nltk
 sklearn
