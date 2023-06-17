@@ -251,3 +251,6 @@ Correlation (class `CorrelationMetrics`)
 Outlier Detection (class `OutlierDetector`)
   - MAD method (Leys 2013, [ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/S0022103113000668))
 
+## License
+
+Apache 2.0
